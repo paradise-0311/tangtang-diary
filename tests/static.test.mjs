@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { BACKUP_LIMIT, makeBackup, quoteCSV, validateBackup } from "../dist/backup.js";
+import { BACKUP_LIMIT, bilirubinAverage, makeBackup, quoteCSV, validateBackup } from "../dist/backup.js";
 import { stagePages } from "../scripts/stage-pages.mjs";
 import { legacy, olderRecords, profile, time } from "./fixtures.mjs";
 
@@ -84,5 +84,19 @@ test("CSV escapes quotes, commas and line breaks while protecting spreadsheet ce
   assert.equal(quoteCSV(45),'"45"');
   for (const text of ["=CMD()","+测试","-测试","@测试"," \t＝测试","\n测试"]) {
     assert.equal(quoteCSV(text),'"' + "'" + text + '"');
+  }
+});
+
+test("four original bilirubin readings remain in a version-one backup", () => {
+  const original = olderRecords.find(record=>record.type==="bilirubin");
+  const readings = [2,"2.1",2,"2.1"];
+  assert.equal(bilirubinAverage(readings),2.05);
+  assert.equal(bilirubinAverage([0,0,0,0]),0);
+  const record = {...original,payload:{...original.payload,readings,value:2.05}};
+  const saved = makeBackup(validateBackup({...legacy,records:[record]}),time);
+  assert.deepEqual(validateBackup(saved).records,[record]);
+  for (const invalid of [[1,2,3],[1,2,3,""],[1,2,3,-1],[1,2,3,Infinity],new Array(4)]) {
+    assert.equal(bilirubinAverage(invalid),null);
+    assert.throws(()=>validateBackup({...saved,records:[{...record,payload:{...record.payload,readings:invalid}}]}),/内容/);
   }
 });

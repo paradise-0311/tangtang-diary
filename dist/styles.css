@@ -144,6 +144,12 @@ svg { display: block; flex-shrink: 0; }
 .filter-chip { flex-shrink: 0; border: 1px solid var(--line); background: var(--surface); color: var(--muted); padding: 9px 13px; font-size: 12px; font-weight: 650; border-radius: 99px; }
 .filter-chip.active { color: #fff; background: var(--accent); border-color: var(--accent); }
 .date-heading { font-size: 12px; color: var(--muted); font-weight: 700; margin: 19px 4px 9px; }
+.date-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 4px 12px; flex-wrap: wrap; }
+.daily-milk { color: var(--accent); }
+.milk-history-link { margin-top: 9px; min-height: 44px; }
+.milk-date-filter { display: flex; align-items: end; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+.milk-date-filter .form-field { flex: 1; min-width: 150px; margin: 0; }
+.milk-date-filter .subtle-action { min-height: 48px; }
 .date-heading:first-of-type { margin-top: 0; }
 .list-card { overflow: hidden; }
 .record-line { display: flex; align-items: start; gap: 10px; padding: 15px 13px; border-bottom: 1px solid var(--line); }
@@ -228,6 +234,8 @@ textarea.field-input { resize: vertical; min-height: 70px; }
 .switch-row:focus-within { outline:2px solid #99b9be; outline-offset:2px; }
 .conditional { border-left: 3px solid #aac3be; margin: 11px 0 16px; padding-left: 13px; }
 .conditional[hidden] { display:none; }
+.bilirubin-values { border: 0; margin: 0; padding: 0; min-inline-size: 0; }
+#bilirubin-average { font-weight: 750; }
 .diaper-detail-form { margin-top:15px; }
 [hidden] { display:none !important; }
 .form-note { font-size:11px; color:var(--muted); line-height:1.6; margin:12px 2px; }

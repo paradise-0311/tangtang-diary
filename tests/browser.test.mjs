@@ -153,7 +153,14 @@ test(engine + " mobile: records, refresh, CSV, new/legacy backup, cancelled or f
       await open(page,"bilirubin");
       if (method==="TSB") await choice(page,"method",method);
       await field(page,"unit").selectOption(unit);
-      await field(page,"value").fill("8.1");
+      if (method==="TcB") {
+        for (const [index,value] of ["1.2","2.1","3.4","4.5"].entries()) {
+          await field(page,"reading").nth(index).fill(value);
+        }
+        assert.equal(await page.locator("#bilirubin-average").innerText(),"2.8");
+      } else {
+        await field(page,"value").fill("8.1");
+      }
       await field(page,"site").fill("测试检测点");
       await field(page,"occurred_at").fill(dates.yesterday);
       await page.locator("#age-hours").filter({hasText:"48"}).waitFor();
@@ -225,6 +232,10 @@ test(engine + " mobile: records, refresh, CSV, new/legacy backup, cancelled or f
     assert.equal(backup.records.length,11);
     assert.equal(backup.records.filter(r=>r.deleted_at).length,1);
     assert.equal(backup.records.find(r=>r.type==="medication").revision,4);
+    const tcb=backup.records.find(r=>r.payload.method==="TcB");
+    assert.deepEqual(tcb.payload.readings,[1.2,2.1,3.4,4.5]);
+    assert.equal(tcb.payload.value,2.8);
+    assert.equal(backup.records.find(r=>r.payload.method==="TSB").payload.readings,undefined);
     const csv = parseCsv((await getBackup(page,"csv")).toString());
     assert.equal(csv.length,10);
     const feed=csv.find(row=>row["记录类型"]==="喂奶");
@@ -237,6 +248,7 @@ test(engine + " mobile: records, refresh, CSV, new/legacy backup, cancelled or f
     assert.equal(csv.find(r=>r["记录类型"]==="用药")["给药方式"],"测试方式");
     assert.equal(csv.find(r=>r["记录类型"]==="尿布" && r["尿布颜色状态"])["尿布颜色状态"],"测试颜色");
     assert.equal(csv.find(r=>r["黄疸检测方法"]==="TSB")["黄疸单位"],"mg/dL");
+    assert.equal(csv.find(r=>r["黄疸检测方法"]==="TcB")["黄疸数值"],"2.8");
     assert.equal(csv.find(r=>r["黄疸检测方法"]==="TcB")["原始记录时间"],
       backup.records.find(r=>r.payload.method==="TcB").occurred_at);
     assert.equal(csv.find(r=>r["记录类型"]==="体温")["体温(℃)"],"36.7");
@@ -331,6 +343,90 @@ test(engine + " mobile: existing IndexedDB is preserved and file share does not 
     const shared=await page.evaluate(()=>window.fictionalShare);
     assert.deepEqual(shared.records,olderRecords);
     assert.deepEqual(shared.profile,profile);
+  } finally {
+    await context.close();
+  }
+});
+
+test(engine + " mobile: dated milk totals and imported bilirubin batches", {timeout:60000}, async () => {
+  const context=await mobile();
+  try {
+    await context.addInitScript(()=>Object.defineProperty(Navigator.prototype,"canShare",{value:()=>false,configurable:true}));
+    const page=await context.newPage();
+    await page.goto(origin+prefix);
+    await ready(page);
+    const readTime = "2026-01-02T12:30:00+08:00";
+    const single = {...olderRecords.find(r=>r.type==="bilirubin"),occurred_at:readTime};
+    const batch = [2,2.1,2,2.1].map((value,index)=>({...single,record_id:"synthetic-batch-"+index,
+      payload:{...single.payload,value,note:`同次测量的第 ${index+1}/4 个读数，原记录未注明测量部位。`}}));
+    const unfinished = batch.slice(0,3).map((record,index)=>({...record,record_id:"other-"+index,
+      occurred_at:"2026-01-01T09:30:00+08:00"}));
+    const bottle = olderRecords.find(r=>r.type==="bottle");
+    const feeds = [
+      {...bottle,record_id:"early",occurred_at:"2026-01-01T23:55:00+08:00",payload:{...bottle.payload,amount_ml:30}},
+      {...bottle,record_id:"late",occurred_at:"2026-01-02T00:05:00+08:00",payload:{...bottle.payload,amount_ml:15}},
+      {...bottle,record_id:"second",occurred_at:"2026-01-02T01:00:00+08:00",payload:{...bottle.payload,amount_ml:"35"}},
+      {...bottle,record_id:"deleted-feed",occurred_at:"2026-01-02T02:00:00+08:00",deleted_at:readTime}
+    ];
+    const records = [...feeds,...batch,single,...unfinished];
+    await nav(page,"settings");
+    await upload(page,{...legacy,records});
+    await confirmRestore(page);
+    await toast(page,"备份已恢复");
+    await page.locator('[data-filter="bilirubin"]').click();
+    assert.equal(await lines(page).count(),5);
+    const average = lines(page).filter({hasText:"平均"});
+    assert.equal(await average.count(),1);
+    assert.match(await average.innerText(),/平均 2\.05 μmol\/L/);
+    assert.equal(await lines(page).filter({hasText:"132 μmol/L"}).count(),1);
+
+    await nav(page,"settings");
+    const preserved=JSON.parse(await getBackup(page));
+    assert.deepEqual(preserved.records,records);
+    await nav(page,"records");
+    await average.getByRole("button",{name:"编辑"}).click();
+    assert.deepEqual(await field(page,"reading").evaluateAll(inputs=>inputs.map(i=>i.value)),["2","2.1","2","2.1"]);
+    await field(page,"reading").nth(0).fill("2.4");
+    await field(page,"note").fill("测试批次备注");
+    await submit(page);
+    assert.match(await average.innerText(),/平均 2\.15 μmol\/L/);
+    assert.match(await average.innerText(),/测试批次备注/);
+    await average.getByRole("button",{name:"删除"}).click();
+    await toast(page,"记录已移入回收");
+    assert.equal(await lines(page).count(),4);
+    await page.getByRole("button",{name:"撤销"}).click();
+    await toast(page,"已恢复记录");
+    assert.equal(await lines(page).count(),5);
+    await nav(page,"settings");
+    const edited=JSON.parse(await getBackup(page));
+    assert.deepEqual(edited.records.filter(r=>r.record_id.startsWith("synthetic-batch")).map(r=>r.payload.value),
+      [2.4,2.1,2,2.1]);
+    const csv=parseCsv((await getBackup(page,"csv")).toString());
+    assert.equal(csv.filter(row=>row["记录类型"]==="黄疸").length,5);
+    assert.equal(csv.find(row=>row["内容摘要"].includes("平均"))["黄疸数值"],"2.15");
+
+    await nav(page,"today");
+    await page.getByRole("button",{name:"历史奶量"}).click();
+    await page.getByRole("heading",{name:"历史奶量"}).waitFor();
+    const summaries=page.locator(".daily-milk");
+    assert.deepEqual(await summaries.allTextContents(),["奶量 50 ml · 2 次","奶量 30 ml · 1 次"]);
+    const date=page.getByLabel("按日期查看");
+    await date.fill("2026-01-01");
+    await date.dispatchEvent("change");
+    assert.deepEqual(await summaries.allTextContents(),["奶量 30 ml · 1 次"]);
+    await lines(page).getByRole("button",{name:"编辑"}).click();
+    await field(page,"amount_ml").fill("45");
+    await submit(page);
+    assert.deepEqual(await summaries.allTextContents(),["奶量 45 ml · 1 次"]);
+    await date.fill("2026-01-03");
+    await date.dispatchEvent("change");
+    await page.getByText("这天没有喂奶记录").waitFor();
+    await page.getByRole("button",{name:"全部日期"}).click();
+    assert.deepEqual(await summaries.allTextContents(),["奶量 50 ml · 2 次","奶量 45 ml · 1 次"]);
+    await page.reload();
+    await ready(page);
+    await page.getByRole("button",{name:"历史奶量"}).click();
+    assert.deepEqual(await summaries.allTextContents(),["奶量 50 ml · 2 次","奶量 45 ml · 1 次"]);
   } finally {
     await context.close();
   }

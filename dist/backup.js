@@ -14,6 +14,12 @@ const numeric = value => (typeof value === "number" || filled(value) &&
   Number.isFinite(Number(value)) && Number(value) >= 0;
 const optionalNumeric = value => empty(value) || numeric(value);
 
+export function bilirubinAverage(readings) {
+  if (!Array.isArray(readings) || readings.length !== 4 || ![...readings].every(numeric)) return null;
+  const average = readings.reduce((sum, reading) => sum + Number(reading) / readings.length, 0);
+  return Number(average.toFixed(2));
+}
+
 function timestamp(value) {
   if (!text(value) || !/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/i.test(value) ||
       !Number.isFinite(Date.parse(value))) return false;
@@ -28,7 +34,8 @@ const validatePayload = {
     optionalText(p.fortifier_product) && optionalNumeric(p.fortifier_amount) &&
     optionalText(p.fortifier_unit) && optionalText(p.fortifier_note),
   diaper: p => ["wet", "dirty", "both"].includes(p.kind) && optionalText(p.color),
-  bilirubin: p => ["TcB", "TSB"].includes(p.method) && numeric(p.value) && filled(p.unit) && optionalText(p.site),
+  bilirubin: p => ["TcB", "TSB"].includes(p.method) && numeric(p.value) && filled(p.unit) && optionalText(p.site) &&
+    (p.readings === undefined || bilirubinAverage(p.readings) !== null),
   temperature: p => numeric(p.value) && optionalText(p.site),
   weight: p => numeric(p.value) && filled(p.unit),
   medication: p => filled(p.name) && numeric(p.dose) && filled(p.unit) && optionalText(p.route)

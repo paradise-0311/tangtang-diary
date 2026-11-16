@@ -1,4 +1,4 @@
-import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, makeBackup, quoteCSV, validateBackup } from "./backup.js";
+import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup, quoteCSV, validateBackup } from "./backup.js";
 
 (() => {
   "use strict";
@@ -39,7 +39,7 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, makeBackup, quoteCSV, validat
     check: '<path d="m4 12 5 5L20 6"/>',
     calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/>'
   };
-  const app = { data: null, db: null, tab: "today", filter: "all", toastTimer: null, saving: false,
+  const app = { data: null, db: null, tab: "today", filter: "all", milkDay: "", toastTimer: null, saving: false,
     storageUnavailable: false, picker: null, sheetTrigger: null };
 
   function svg(name, extra = "") {
@@ -169,6 +169,7 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, makeBackup, quoteCSV, validat
     if (tab) {
       app.tab = tab;
       app.filter = "all";
+      app.milkDay = "";
       document.getElementById("view").scrollTop = 0;
     }
     render();
@@ -179,12 +180,56 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, makeBackup, quoteCSV, validat
     return (app.data?.records || []).filter((r) => !r.deleted_at)
       .sort((a,b) => new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime());
   }
-  function todayRecords(type) {
-    const today = dayKey(nowISO());
-    return liveRecords().filter((r) => dayKey(r.occurred_at) === today && (!type || r.type === type));
+  function displayRecords() {
+    const records = liveRecords();
+    const batches = new Map();
+    for (const record of records) {
+      if (record.type !== "bilirubin" || record.payload.readings) continue;
+      const {method, unit, site, note, measurement_group} = record.payload;
+      // Match the numbered readings in older text imports. Same-time readings alone are not evidence of a batch.
+      const match = /^同次测量的第 ([1-4])\/4 个读数(?:，原记录未注明测量部位)?。(?:\n([\s\S]*))?$/.exec(note || "");
+      if (!match) continue;
+      const key = JSON.stringify([record.occurred_at,method,unit,site || "",measurement_group || ""]);
+      if (!batches.has(key)) batches.set(key,[]);
+      batches.get(key).push({record,position:Number(match[1]),note:match[2] || ""});
+    }
+    const grouped = new Map();
+    const hidden = new Set();
+    for (const batch of batches.values()) {
+      if (batch.length !== 4 || new Set(batch.map(entry=>entry.position)).size !== 4) continue;
+      batch.sort((a,b)=>a.position-b.position);
+      const readings = batch.map(entry=>entry.record.payload.value);
+      const value = bilirubinAverage(readings);
+      if (value === null) continue;
+      const first = batch[0].record;
+      const groupIds = batch.map(entry=>entry.record.record_id);
+      const note = [...new Set(batch.map(entry=>entry.note).filter(Boolean))].join("\n");
+      grouped.set(first.record_id,{...first,groupIds,payload:{...first.payload,readings,value,note}});
+      for (const recordId of groupIds.slice(1)) hidden.add(recordId);
+    }
+    return records.filter(record=>!hidden.has(record.record_id)).map(record=>grouped.get(record.record_id) || record);
   }
-  function newest(type) {
-    return liveRecords().find((r) => r.type === type);
+  function findRecord(recordId) {
+    const record = app.data.records.find(r=>r.record_id===recordId && !r.deleted_at);
+    return record?.type === "bilirubin" ? displayRecords().find(r=>r.record_id===recordId) : record;
+  }
+  function milkByDay(records) {
+    const days = new Map();
+    for (const {type,occurred_at,payload} of records) {
+      if (type !== "bottle") continue;
+      const date = dayKey(occurred_at);
+      if (!days.has(date)) days.set(date,{total:0,count:0});
+      const day = days.get(date);
+      day.total += Number(payload.amount_ml) || 0;
+      day.count += 1;
+    }
+    return days;
+  }
+  function formatMilk(total) {
+    return Number(total.toFixed(2));
+  }
+  function bilirubinValue(payload) {
+    return bilirubinAverage(payload.readings) ?? payload.value ?? "—";
   }
   function titleFor(r) {
     if (r.type === "bottle") return "喂奶";
@@ -202,7 +247,7 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, makeBackup, quoteCSV, validat
       return `${milk} · ${p.amount_ml ?? "—"} ml${hmf}`;
     }
     if (r.type === "diaper") return ({ wet:"小便", dirty:"大便", both:"小便＋大便" })[p.kind] || "尿布";
-    if (r.type === "bilirubin") return `${p.method || "—"} · ${p.value ?? "—"} ${p.unit || ""}`;
+    if (r.type === "bilirubin") return `${p.method || "—"} · ${p.readings ? "平均 " : ""}${bilirubinValue(p)} ${p.unit || ""}`;
     if (r.type === "temperature") return `${p.value ?? "—"} ℃${p.site ? " · "+p.site : ""}`;
     if (r.type === "weight") return `${p.value ?? "—"} ${p.unit || "g"}`;
     if (r.type === "medication") return `${p.name || "未命名"} · ${p.dose ?? "—"} ${p.unit || ""}`;
@@ -221,12 +266,12 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, makeBackup, quoteCSV, validat
       <div class="activity-details">${escapeHtml(detailFor(r))}</div>
     </div><button type="button" class="row-trailing" data-action="record-edit" data-id="${escapeHtml(r.record_id)}" aria-label="编辑${titleFor(r)}">${svg("chevron","icon-sm")}</button></div>`;
   }
-  function renderToday() {
-    const feed = todayRecords("bottle");
-    const total = feed.reduce((sum,r) => sum + (Number(r.payload.amount_ml) || 0),0);
-    const diapers = todayRecords("diaper").length;
-    const latest = newest("bottle");
-    const recent = liveRecords().slice(0,4);
+  function renderToday(records) {
+    const today = dayKey(nowISO());
+    const feed = milkByDay(records).get(today) || {total:0,count:0};
+    const diapers = records.filter(r=>r.type === "diaper" && dayKey(r.occurred_at) === today).length;
+    const latest = records.find(r=>r.type === "bottle");
+    const recent = records.slice(0,4);
     const nickname = escapeHtml(app.data.profile.nickname || "宝宝");
     const ready = hasProfile();
     const d = new Date();
@@ -237,10 +282,11 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, makeBackup, quoteCSV, validat
         <div class="hero-title">${ready ? `${nickname} · 第 ${babyDay()} 天` : nickname}</div>
         <p class="hero-sub">${ready ? "记录好每一次喂养和测量" : "请填写宝宝昵称和准确出生时间；已有备份可到设置导入。"}</p></div><div class="avatar-baby">${svg("baby","icon-xl")}</div></div>
         <div class="metric-row">
-          <div class="metric"><span class="metric-label">今日奶量</span><span class="metric-number">${total}<small>ml</small></span></div>
-          <div class="metric"><span class="metric-label">喂奶次数</span><span class="metric-number">${feed.length}<small>次</small></span></div>
+          <div class="metric"><span class="metric-label">今日奶量</span><span class="metric-number">${formatMilk(feed.total)}<small>ml</small></span></div>
+          <div class="metric"><span class="metric-label">喂奶次数</span><span class="metric-number">${feed.count}<small>次</small></span></div>
           <div class="metric"><span class="metric-label">尿布</span><span class="metric-number">${diapers}<small>次</small></span></div>
         </div>
+        <button type="button" class="subtle-action milk-history-link" data-action="milk-history">历史奶量 ${svg("arrow","icon-sm")}</button>
       </div>
       <div class="section-heading"><h2>快速记录</h2><span class="hint">点击即可添加</span></div>
       <div class="action-grid">
@@ -261,23 +307,32 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, makeBackup, quoteCSV, validat
       <div class="line-menu"><button type="button" data-action="record-edit" data-id="${escapeHtml(r.record_id)}" aria-label="编辑">${svg("edit","icon-sm")}</button>
       <button type="button" data-action="record-delete" data-id="${escapeHtml(r.record_id)}" aria-label="删除">${svg("trash","icon-sm")}</button></div></div>`;
   }
-  function renderRecords() {
+  function renderRecords(records) {
     const chips = [["all","全部"],...RECORD_TYPES.map((t) => [t,TYPE_LABELS[t]])];
-    const list = liveRecords().filter((r) => app.filter === "all" || r.type === app.filter);
+    const showingMilk = app.filter === "bottle";
+    const list = records.filter(r=>(app.filter === "all" || r.type === app.filter) &&
+      (!showingMilk || !app.milkDay || dayKey(r.occurred_at) === app.milkDay));
+    const dailyMilk = milkByDay(list);
     let html = "", last = null;
     for (const r of list) {
       const key = dayKey(r.occurred_at);
       if (key !== last) {
         if (last !== null) html += "</div>";
-        html += `<div class="date-heading">${dayTitle(r.occurred_at)} · ${key}</div><div class="list-card">`;
+        const milk = dailyMilk.get(key);
+        html += `<div class="date-heading"><span>${dayTitle(r.occurred_at)} · ${key}</span>
+          ${milk ? `<span class="daily-milk">奶量 ${formatMilk(milk.total)} ml · ${milk.count} 次</span>` : ""}</div><div class="list-card">`;
         last = key;
       }
       html += recordLine(r);
     }
     if (last !== null) html += "</div>";
-    return `<section class="screen-enter"><div class="screen-title"><div><div class="eyebrow">可补记 · 可修改 · 可撤销</div><h1>记录时间线</h1></div></div>
+    const missing = showingMilk && app.milkDay ? "这天没有喂奶记录" : "暂无这类记录";
+    return `<section class="screen-enter"><div class="screen-title"><div><div class="eyebrow">可补记 · 可修改 · 可撤销</div><h1>${showingMilk?"历史奶量":"记录时间线"}</h1></div></div>
       <div class="filter-chips">${chips.map(([k,l])=>`<button type="button" class="filter-chip ${app.filter===k?"active":""}" data-filter="${k}" aria-pressed="${app.filter===k}">${l}</button>`).join("")}</div>
-      ${html || `<div class="activity-list"><div class="empty-state">${svg("history","icon-xl")}<strong>暂无这类记录</strong>可在今天或健康页面添加记录</div></div>`}
+      ${showingMilk ? `<div class="milk-date-filter"><label class="form-field"><span>按日期查看</span>
+        <input type="date" class="field-input" id="milk-date" value="${escapeHtml(app.milkDay)}"/></label>
+        ${app.milkDay ? '<button type="button" class="subtle-action" data-action="milk-date-clear">全部日期</button>' : ""}</div>` : ""}
+      ${html || `<div class="activity-list"><div class="empty-state">${svg("history","icon-xl")}<strong>${missing}</strong>可在今天或健康页面添加记录</div></div>`}
     </section>`;
   }
   function healthCard(type, label, value, note) {
@@ -287,8 +342,8 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, makeBackup, quoteCSV, validat
       <button type="button" class="health-add" data-action="new-record" data-kind="${type}" aria-label="新增${label}">${svg("plus","icon-sm")}</button>
     </div>`;
   }
-  function trendMarkup(type) {
-    const values = liveRecords().filter((r) => r.type === type &&
+  function trendMarkup(type, records) {
+    const values = records.filter((r) => r.type === type &&
       (type !== "weight" || ["g","kg"].includes(r.payload.unit))).reverse().map((r) => {
       const raw = Number(r.payload.value);
       return { v: type === "weight" && r.payload.unit === "kg" ? raw*1000 : raw, when:r.occurred_at };
@@ -300,17 +355,18 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, makeBackup, quoteCSV, validat
     const path = points.map((p,i)=>`${i===0?"M":"L"} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(" ");
     return `<div class="trend-box"><svg role="img" viewBox="0 0 310 86" aria-label="历史数值趋势"><path class="chart-grid" d="M10 64H300 M10 22H300"/><path d="${path}"/>${points.map(p=>`<circle cx="${p.x}" cy="${p.y}" r="4.7"/>`).join("")}</svg></div>`;
   }
-  function renderHealth() {
+  function renderHealth(records) {
+    const newest = type => records.find(r=>r.type===type);
     const temp=newest("temperature"), bili=newest("bilirubin"), weight=newest("weight"), med=newest("medication");
     return `<section class="screen-enter">
       <div class="screen-title"><div><div class="eyebrow">记录实际情况 · 方便就诊核对</div><h1>宝宝健康</h1></div></div>
       <div class="health-grid">
-        ${healthCard("bilirubin","最近黄疸",bili ? `${escapeHtml(bili.payload.value)} <small>${escapeHtml(bili.payload.unit)}</small>` : "",bili ? `${escapeHtml(bili.payload.method)} · ${formatShortDate(bili.occurred_at)}` : "")}
+        ${healthCard("bilirubin","最近黄疸",bili ? `${bili.payload.readings ? "<small>平均</small> " : ""}${escapeHtml(bilirubinValue(bili.payload))} <small>${escapeHtml(bili.payload.unit)}</small>` : "",bili ? `${escapeHtml(bili.payload.method)} · ${formatShortDate(bili.occurred_at)}` : "")}
         ${healthCard("temperature","最近体温",temp ? `${escapeHtml(temp.payload.value)} <small>℃</small>` : "",temp ? formatShortDate(temp.occurred_at) : "")}
         ${healthCard("weight","最近体重",weight ? `${escapeHtml(weight.payload.value)} <small>${escapeHtml(weight.payload.unit)}</small>` : "",weight ? formatShortDate(weight.occurred_at) : "")}
         ${healthCard("medication","最近用药",med ? `<small>${escapeHtml(med.payload.name)}</small>` : "",med ? formatShortDate(med.occurred_at) : "")}
       </div>
-      <div class="trend-card"><h3>体重变化</h3>${trendMarkup("weight")}</div>
+      <div class="trend-card"><h3>体重变化</h3>${trendMarkup("weight",records)}</div>
       <div class="demo-banner">${svg("info")}<span>黄疸测量要区分经皮（TcB）和血清（TSB），并保存原始单位和时间。这里仅作记录，不提供诊断、风险分级或用药建议。</span></div>
     </section>`;
   }
@@ -344,7 +400,7 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, makeBackup, quoteCSV, validat
     document.getElementById("theme-icon").innerHTML=svg(app.data.settings.dark?"sun":"moon","icon-sm");
     const sections={today:renderToday,records:renderRecords,health:renderHealth,settings:renderSettings};
     const warning = app.storageUnavailable ? '<div class="demo-banner" role="alert">本机存储不可用，已有记录可能暂时无法显示。请重新打开网页再试。</div>' : "";
-    document.getElementById("view").innerHTML=warning+(sections[app.tab]||renderToday)();
+    document.getElementById("view").innerHTML=warning+(sections[app.tab]||renderToday)(displayRecords());
     renderNav();
   }
   function switchTab(tab) {
@@ -416,11 +472,22 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, makeBackup, quoteCSV, validat
         </form>`;
     }
     if (kind==="bilirubin") {
+      const readings = p.readings || ["","","",""];
+      const showFour = !edit || !!p.readings;
+      const numericOptions = {required:true,min:0,step:"any"};
+      const inputs = readings.map((value,index)=>field(`第 ${index+1} 次`,"reading",value,"number",numericOptions));
       return `${sheetHeader(edit?"编辑黄疸记录":"记录黄疸检测","保留检测方式、原始单位和测量时间")}
         <form id="record-form" data-kind="bilirubin" data-edit="${editId}">
           <div class="form-field"><span>检测方式</span>${choice("method",p.method||"TcB",[["TcB","经皮 TcB"],["TSB","血清 TSB"]],2)}</div>
-          <div class="field-row">${field("测量数值","value",p.value??"","number",{required:true,min:0,step:"any",placeholder:"按报告填写"})}
-            <label class="form-field"><span>原始单位</span><select class="field-input" name="unit">${optionsFor([["μmol/L","μmol/L"],["mg/dL","mg/dL"]],p.unit)}</select></label></div>
+          <fieldset class="bilirubin-values" id="bilirubin-four" ${showFour?"":"hidden disabled"}>
+            <div class="field-row">${inputs.slice(0,2).join("")}</div>
+            <div class="field-row">${inputs.slice(2).join("")}</div>
+            <div class="age-help">四次平均值 <output id="bilirubin-average" aria-live="polite">${bilirubinAverage(readings) ?? "—"}</output></div>
+          </fieldset>
+          <fieldset class="bilirubin-values" id="bilirubin-single" ${showFour?"hidden disabled":""}>
+            ${field("测量数值","value",p.value??"","number",numericOptions)}
+          </fieldset>
+          <label class="form-field"><span>原始单位</span><select class="field-input" name="unit">${optionsFor([["μmol/L","μmol/L"],["mg/dL","mg/dL"]],p.unit)}</select></label>
           ${timeField(when)}
           <div class="age-help">根据宝宝出生时间推算，当前选择的测量时间约为生后 <strong id="age-hours">${hoursSinceBirth(when)??"—"}</strong> 小时</div>
           ${field("检测部位 / 机构（可选）","site",p.site||"","text",{placeholder:"例如 额头、医院"})}
@@ -481,7 +548,8 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, makeBackup, quoteCSV, validat
     layer.style.setProperty("--sheet-height", viewport.height + "px");
   }
   function openSheet(kind,recordId="") {
-    const record=app.data.records.find(r=>r.record_id===recordId&&!r.deleted_at);
+    const record=recordId ? findRecord(recordId) : null;
+    if (recordId && !record) return;
     const isProfile=kind==="profile";
     const content=isProfile ? profileForm() : sheetMarkup(kind,record);
     if (!content) return;
@@ -491,6 +559,20 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, makeBackup, quoteCSV, validat
     document.getElementById("fortifier-check")?.addEventListener("change", e=>{
       document.getElementById("fortifier-details").hidden=!e.target.checked;
     });
+    if (kind === "bilirubin") {
+      const four = document.getElementById("bilirubin-four");
+      const single = document.getElementById("bilirubin-single");
+      four.addEventListener("input",()=>{
+        const readings = [...four.querySelectorAll('input[name="reading"]')].map(input=>input.value);
+        document.getElementById("bilirubin-average").textContent = bilirubinAverage(readings) ?? "—";
+      });
+      if (!record) form.addEventListener("change",event=>{
+        if (event.target.name !== "method") return;
+        const isTranscutaneous = event.target.value === "TcB";
+        four.hidden = four.disabled = !isTranscutaneous;
+        single.hidden = single.disabled = isTranscutaneous;
+      });
+    }
     const timeInput=document.querySelector('#record-form input[name="occurred_at"]');
     const updateAge=e=>{
       const d=document.getElementById("age-hours"); if(d) d.textContent=String(hoursSinceBirth(localToISO(e.target.value))??"—");
@@ -538,7 +620,7 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, makeBackup, quoteCSV, validat
   async function submitRecord(event) {
     event.preventDefault();
     const form=event.currentTarget, f=new FormData(form), kind=form.dataset.kind, recordId=form.dataset.edit;
-    const old=app.data.records.find(r=>r.record_id===recordId && !r.deleted_at);
+    const old=recordId ? findRecord(recordId) : null;
     const entered=f.get("occurred_at");
     const when=old && entered===localInput(old.occurred_at) ? old.occurred_at : localToISO(entered);
     if (!when) return showToast("请填写有效的记录日期和时间");
@@ -560,7 +642,16 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, makeBackup, quoteCSV, validat
         }
       }
     } else if (kind==="diaper") p={kind:v("kind"),color:v("color"),note:v("note")};
-    else if (kind==="bilirubin") p={method:v("method"),value:Number(f.get("value")),unit:v("unit"),site:v("site"),note:v("note")};
+    else if (kind==="bilirubin") {
+      p={method:v("method"),value:Number(f.get("value")),unit:v("unit"),site:v("site"),note:v("note")};
+      const readings = f.getAll("reading");
+      if (readings.length) {
+        const average = bilirubinAverage(readings);
+        if (average === null) return showToast("请填写四个有效的读数");
+        p.value = average;
+        p.readings = readings.map(Number);
+      }
+    }
     else if (kind==="temperature") p={value:Number(f.get("value")),site:v("site"),note:v("note")};
     else if (kind==="weight") p={value:Number(f.get("value")),unit:v("unit"),note:v("note")};
     else if (kind==="medication") {
@@ -571,13 +662,24 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, makeBackup, quoteCSV, validat
     if (recordId && !old) return showToast("这笔记录已变更，请关闭后重新打开");
     if (!old && app.data.records.length >= RECORD_LIMIT) return showToast("已达到记录条数上限，请先备份");
     const time=nowISO();
-    const records=old ? app.data.records.map(r=>r===old ? {...old, payload:{...old.payload,...p},
-      occurred_at:when, updated_at:time, revision:(old.revision||1)+1} : r) :
+    const ids = old?.groupIds || (old ? [old.record_id] : []);
+    const records=old ? app.data.records.map(r=>{
+      const position = ids.indexOf(r.record_id);
+      if (position < 0) return r;
+      const payload = {...r.payload,...p};
+      if (old.groupIds) {
+        payload.value = p.readings[position];
+        delete payload.readings;
+        payload.measurement_group = ids[0];
+        payload.note = `同次测量的第 ${position + 1}/4 个读数。${p.note ? "\n" + p.note : ""}`;
+      }
+      return {...r,payload,occurred_at:when,updated_at:time,revision:(r.revision||1)+1};
+    }) :
       [...app.data.records,{record_id:id(),type:kind,payload:p,occurred_at:when,created_at:time,updated_at:time,revision:1,deleted_at:null}];
     await saveAndRender({...app.data,records},old?"记录已更新":"已保存记录",{close:true});
   }
-  function changeDeleted(recordId, deletedAt, message) {
-    const records=app.data.records.map(r=>r.record_id===recordId ? {...r,deleted_at:deletedAt,
+  function changeDeleted(recordIds, deletedAt, message) {
+    const records=app.data.records.map(r=>recordIds.includes(r.record_id) ? {...r,deleted_at:deletedAt,
       updated_at:nowISO(),revision:(r.revision||1)+1} : r);
     return saveAndRender({...app.data,records},message);
   }
@@ -586,14 +688,15 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, makeBackup, quoteCSV, validat
     const time=nowISO();
     const rec={record_id:id(),type:"diaper",payload:{kind,color:"",note:""},occurred_at:time,created_at:time,updated_at:time,revision:1,deleted_at:null};
     if (await saveAndRender({...app.data,records:[...app.data.records,rec]},null,{close:true})) {
-      showToast("尿布已记录","撤销",()=>changeDeleted(rec.record_id,nowISO(),"已撤销"));
+      showToast("尿布已记录","撤销",()=>changeDeleted([rec.record_id],nowISO(),"已撤销"));
     }
   }
   async function removeRecord(recordId) {
-    const r=app.data.records.find(x=>x.record_id===recordId && !x.deleted_at);
+    const r=findRecord(recordId);
     if (!r) return;
-    if (await changeDeleted(recordId,nowISO())) {
-      showToast("记录已移入回收","撤销",()=>changeDeleted(recordId,null,"已恢复记录"));
+    const ids = r.groupIds || [recordId];
+    if (await changeDeleted(ids,nowISO())) {
+      showToast("记录已移入回收","撤销",()=>changeDeleted(ids,null,"已恢复记录"));
     }
   }
   async function toggleTheme() {
@@ -633,7 +736,7 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, makeBackup, quoteCSV, validat
   async function exportCSV() {
     if (app.storageUnavailable) return showToast("暂时读不到本机数据，请重新打开再导出");
     const rows=[["记录时间","记录类型","内容摘要","喂奶类型","奶量(ml)","添加母乳增强剂","增强剂产品","增强剂用量","增强剂单位","增强剂备注","尿布类型","尿布颜色状态","黄疸检测方法","黄疸数值","黄疸单位","测量部位/机构","体温(℃)","体重数值","体重单位","药品名称","实际剂量","剂量单位","给药方式","备注","原始记录时间"]];
-    for (const r of liveRecords()) {
+    for (const r of displayRecords()) {
       const p=r.payload||{};
       rows.push([
         localInput(r.occurred_at).replace("T"," "),TYPE_LABELS[r.type]||r.type,detailFor(r),
@@ -647,7 +750,7 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, makeBackup, quoteCSV, validat
         r.type==="diaper" ? ({wet:"小便",dirty:"大便",both:"都有"}[p.kind]||p.kind) : "",
         r.type==="diaper" ? p.color||"" : "",
         r.type==="bilirubin" ? p.method||"" : "",
-        r.type==="bilirubin" ? p.value??"" : "",
+        r.type==="bilirubin" ? bilirubinValue(p) : "",
         r.type==="bilirubin" ? p.unit||"" : "",
         ["bilirubin","temperature"].includes(r.type) ? p.site||"" : "",
         r.type==="temperature" ? p.value??"" : "",
@@ -732,6 +835,17 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, makeBackup, quoteCSV, validat
     const name=action.dataset.action;
     if (name==="close-sheet") return closeSheet();
     if (name==="home") return switchTab("today");
+    if (name==="milk-history") {
+      app.filter = "bottle";
+      app.milkDay = "";
+      return switchTab("records");
+    }
+    if (name==="milk-date-clear") {
+      app.milkDay = "";
+      render();
+      document.getElementById("milk-date").focus({preventScroll:true});
+      return;
+    }
     if (name==="new-record") return openSheet(action.dataset.kind);
     if (name==="record-edit") {
       const rec=app.data.records.find(r=>r.record_id===action.dataset.id);
@@ -750,6 +864,11 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, makeBackup, quoteCSV, validat
   });
   document.addEventListener("change",(event)=>{
     const radio=event.target;
+    if (radio.id === "milk-date") {
+      app.milkDay = radio.value;
+      render();
+      return;
+    }
     if (!radio.matches('input[type="radio"][name]')) return;
     const group=radio.closest("[data-choice-group]");
     if (group) group.querySelectorAll(".choice-pill").forEach(l=>l.classList.toggle("selected",!!l.querySelector("input:checked")));
