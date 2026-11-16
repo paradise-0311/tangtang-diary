@@ -1,0 +1,23 @@
+# Local or generated data: never commit baby-care exports or real records.
+*完整备份_*.json
+*记录明细_*.csv
+*备份_*.json
+*.csv
+backups/
+exports/
+private-data/
+
+# Credentials and local runtime state.
+.env
+.env.*
+.openai/
+*.pem
+*.key
+*.token
+node_modules/
+.pages/
+playwright-report/
+test-results/
+.DS_Store
+Thumbs.db
+*.log
