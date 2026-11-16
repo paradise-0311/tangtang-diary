@@ -39,7 +39,7 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
     check: '<path d="m4 12 5 5L20 6"/>',
     calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/>'
   };
-  const app = { data: null, db: null, tab: "today", filter: "all", milkDay: "", toastTimer: null, saving: false,
+  const app = { data: null, db: null, tab: "today", filter: "all", milkDay: "", milkPeriod: 7, toastTimer: null, saving: false,
     storageUnavailable: false, picker: null, sheetTrigger: null };
 
   function svg(name, extra = "") {
@@ -306,18 +306,76 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
       <div class="line-menu"><button type="button" data-action="record-edit" data-id="${escapeHtml(r.record_id)}" aria-label="编辑">${svg("edit","icon-sm")}</button>
       <button type="button" data-action="record-delete" data-id="${escapeHtml(r.record_id)}" aria-label="删除">${svg("trash","icon-sm")}</button></div></div>`;
   }
+  function milkTrendMarkup(totals, endDay, period) {
+    const end = new Date(endDay+"T12:00:00");
+    const days = Array.from({length:period},(_,index)=>{
+      const date = new Date(end);
+      date.setDate(end.getDate() + index - period + 1);
+      const key = dayKey(date);
+      return {key,label:`${date.getMonth()+1}/${date.getDate()}`,total:totals.get(key)?.total};
+    });
+    const available = days.filter(day=>day.total !== undefined);
+    const first = days[0].label;
+    const last = days.at(-1).label;
+    return `<section class="trend-card milk-trend" aria-labelledby="milk-trend-title">
+      <div class="milk-trend-head">
+        <h2 id="milk-trend-title">每日总奶量</h2>
+        <div class="milk-period" role="group" aria-label="折线图时间范围">
+          ${[7,30].map(count=>`<button type="button" class="filter-chip" data-action="milk-period" data-days="${count}" aria-pressed="${period===count}">${count} 天</button>`).join("")}
+        </div>
+      </div>
+      <p class="milk-trend-range">${first} 至 ${last} · ml</p>
+      ${available.length ? milkTrendPlot(days,available) : "<p class='milk-trend-empty'>这段时间没有喂奶记录</p>"}
+    </section>`;
+  }
+  function milkTrendPlot(days, available) {
+    const left=35, right=296, top=11, bottom=109;
+    const peak = Math.max(10,...available.map(day=>day.total));
+    const step = 10 ** Math.floor(Math.log10(peak));
+    const ceiling = Math.ceil(peak/step)*step;
+    const plotY = total => bottom - (total/ceiling)*(bottom-top);
+    const plotX = index => left + (index/(days.length-1))*(right-left);
+    const path = days.map((day,index)=>{
+      if (day.total === undefined) return "";
+      // Start a new segment after an unrecorded day.
+      const command = days[index-1]?.total === undefined ? "M" : "L";
+      return `${command}${plotX(index).toFixed(2)} ${plotY(day.total).toFixed(2)}`;
+    }).join(" ");
+    const ticks = [ceiling,ceiling/2,0].map(total=>{
+      const y = plotY(total);
+      return `<line x1="${left}" x2="${right}" y1="${y}" y2="${y}"/>
+        <text x="${left-6}" y="${y+4}" text-anchor="end">${formatMilk(total)}</text>`;
+    });
+    const dateLabels = [0,Math.floor(days.length/2),days.length-1].map((index,i)=>
+      `<text x="${plotX(index)}" y="130" text-anchor="${["start","middle","end"][i]}">${days[index].label}</text>`);
+    const marks = days.map((day,index)=>day.total === undefined ? "" :
+      `<circle cx="${plotX(index)}" cy="${plotY(day.total)}" r="${days.length===7?4:3}">
+        <title>${day.label} · ${formatMilk(day.total)} ml</title></circle>`).join("");
+    const summary = available.map(day=>`${day.label} ${formatMilk(day.total)} 毫升`).join("，");
+    const hasGaps = available.length < days.length;
+    return `<figure class="milk-trend-plot">
+      <svg viewBox="0 0 310 136" role="img" aria-label="每日总奶量折线" aria-describedby="milk-trend-values">
+        <desc id="milk-trend-values">${summary}${hasGaps?"。无记录的日期留空。":""}</desc>
+        ${ticks.join("")}
+        ${dateLabels.join("")}
+        <path d="${path}"/>
+        ${marks}
+      </svg>
+      ${hasGaps ? "<figcaption>无记录的日期留空</figcaption>" : ""}
+    </figure>`;
+  }
   function renderRecords(records) {
     const chips = [["all","全部"],...RECORD_TYPES.map((t) => [t,TYPE_LABELS[t]])];
     const showingMilk = app.filter === "bottle";
     const list = records.filter(r=>(app.filter === "all" || r.type === app.filter) &&
       (!showingMilk || !app.milkDay || dayKey(r.occurred_at) === app.milkDay));
-    const dailyMilk = milkByDay(list);
+    const dailyMilk = milkByDay(records);
     let html = "", last = null;
     for (const r of list) {
       const key = dayKey(r.occurred_at);
       if (key !== last) {
         if (last !== null) html += "</div>";
-        const milk = dailyMilk.get(key);
+        const milk = (app.filter === "all" || showingMilk) && dailyMilk.get(key);
         html += `<div class="date-heading"><span>${dayTitle(r.occurred_at)} · ${key}</span>
           ${milk ? `<span class="daily-milk">奶量 ${formatMilk(milk.total)} ml · ${milk.count} 次</span>` : ""}</div><div class="list-card">`;
         last = key;
@@ -325,13 +383,19 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
       html += recordLine(r);
     }
     if (last !== null) html += "</div>";
-    const missing = showingMilk && app.milkDay ? "这天没有喂奶记录" : "暂无这类记录";
+    const missing = showingMilk ? "这天没有喂奶记录" : "暂无这类记录";
+    const empty = showingMilk && !app.milkDay ? "" : `<div class="activity-list"><div class="empty-state">
+      ${svg("history","icon-xl")}<strong>${missing}</strong>
+      ${showingMilk ? "可在今天页补记喂奶" : "可在今天或健康页面添加记录"}</div></div>`;
+    const today = dayKey(nowISO());
+    const chartEnd = app.milkDay || dailyMilk.keys().next().value || today;
     return `<section class="screen-enter"><div class="screen-title"><div><div class="eyebrow">可补记 · 可修改 · 可撤销</div><h1>${showingMilk?"历史奶量":"记录时间线"}</h1></div></div>
       <div class="filter-chips">${chips.map(([k,l])=>`<button type="button" class="filter-chip ${app.filter===k?"active":""}" data-filter="${k}" aria-pressed="${app.filter===k}">${l}</button>`).join("")}</div>
       ${showingMilk ? `<div class="milk-date-filter"><label class="form-field"><span>按日期查看</span>
-        <input type="date" class="field-input" id="milk-date" value="${escapeHtml(app.milkDay)}"/></label>
-        ${app.milkDay ? '<button type="button" class="subtle-action" data-action="milk-date-clear">全部日期</button>' : ""}</div>` : ""}
-      ${html || `<div class="activity-list"><div class="empty-state">${svg("history","icon-xl")}<strong>${missing}</strong>可在今天或健康页面添加记录</div></div>`}
+        <input type="date" class="field-input" id="milk-date" value="${escapeHtml(app.milkDay)}" max="${today}"/></label>
+        ${app.milkDay ? '<button type="button" class="subtle-action" data-action="milk-date-clear">全部日期</button>' : ""}</div>
+        ${milkTrendMarkup(dailyMilk,chartEnd,app.milkPeriod)}` : ""}
+      ${html || empty}
     </section>`;
   }
   function healthCard(type, label, value, note) {
@@ -839,6 +903,12 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
       document.getElementById("milk-date").focus({preventScroll:true});
       return;
     }
+    if (name==="milk-period") {
+      app.milkPeriod = Number(action.dataset.days);
+      render();
+      document.querySelector('.milk-period [aria-pressed="true"]').focus({preventScroll:true});
+      return;
+    }
     if (name==="new-record") return openSheet(action.dataset.kind);
     if (name==="record-edit") {
       const rec=app.data.records.find(r=>r.record_id===action.dataset.id);
@@ -858,6 +928,7 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
   document.addEventListener("change",(event)=>{
     const radio=event.target;
     if (radio.id === "milk-date") {
+      if (!radio.validity.valid) return;
       app.milkDay = radio.value;
       render();
       return;

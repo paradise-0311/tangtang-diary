@@ -358,6 +358,9 @@ test(engine + " mobile: dated milk totals and imported bilirubin batches", {time
     const page=await context.newPage();
     await page.goto(origin+prefix);
     await ready(page);
+    await page.getByRole("button",{name:"历史奶量"}).click();
+    await page.getByText("这段时间没有喂奶记录").waitFor();
+    assert.equal(await page.locator(".milk-trend-plot").count(),0);
     const readTime = "2026-01-02T12:30:00+08:00";
     const single = {...olderRecords.find(r=>r.type==="bilirubin"),occurred_at:readTime};
     const batch = [2,2.1,2,2.1].map((value,index)=>({...single,record_id:"synthetic-batch-"+index,
@@ -366,6 +369,8 @@ test(engine + " mobile: dated milk totals and imported bilirubin batches", {time
       occurred_at:"2026-01-01T09:30:00+08:00"}));
     const bottle = olderRecords.find(r=>r.type==="bottle");
     const feeds = [
+      {...bottle,record_id:"previous-month",occurred_at:"2025-12-10T12:00:00+08:00",payload:{...bottle.payload,amount_ml:25}},
+      {...bottle,record_id:"explicit-zero",occurred_at:"2025-12-29T12:00:00+08:00",payload:{...bottle.payload,amount_ml:0}},
       {...bottle,record_id:"early",occurred_at:"2026-01-01T23:55:00+08:00",payload:{...bottle.payload,amount_ml:30}},
       {...bottle,record_id:"late",occurred_at:"2026-01-02T00:05:00+08:00",payload:{...bottle.payload,amount_ml:15}},
       {...bottle,record_id:"second",occurred_at:"2026-01-02T01:00:00+08:00",payload:{...bottle.payload,amount_ml:"35"}},
@@ -412,24 +417,37 @@ test(engine + " mobile: dated milk totals and imported bilirubin batches", {time
     await page.getByRole("button",{name:"历史奶量"}).click();
     await page.getByRole("heading",{name:"历史奶量"}).waitFor();
     const summaries=page.locator(".daily-milk");
-    assert.deepEqual(await summaries.allTextContents(),["奶量 50 ml · 2 次","奶量 30 ml · 1 次"]);
+    const chart=page.getByRole("img",{name:"每日总奶量折线"});
+    const marks=chart.locator("circle title");
+    assert.deepEqual(await summaries.allTextContents(),
+      ["奶量 50 ml · 2 次","奶量 30 ml · 1 次","奶量 0 ml · 1 次","奶量 25 ml · 1 次"]);
+    assert.deepEqual(await marks.allTextContents(),["12/29 · 0 ml","1/1 · 30 ml","1/2 · 50 ml"]);
+    assert.equal((await chart.locator("path").getAttribute("d")).match(/M/g).length,2);
+    const month=page.getByRole("button",{name:"30 天",exact:true});
+    await month.click();
+    assert.equal(await month.getAttribute("aria-pressed"),"true");
+    assert.deepEqual(await marks.allTextContents(),["12/10 · 25 ml","12/29 · 0 ml","1/1 · 30 ml","1/2 · 50 ml"]);
+    await page.getByRole("button",{name:"7 天",exact:true}).click();
     const date=page.getByLabel("按日期查看");
     await date.fill("2026-01-01");
     await date.dispatchEvent("change");
     assert.deepEqual(await summaries.allTextContents(),["奶量 30 ml · 1 次"]);
+    assert.deepEqual(await marks.allTextContents(),["12/29 · 0 ml","1/1 · 30 ml"]);
     await lines(page).getByRole("button",{name:"编辑"}).click();
     await field(page,"amount_ml").fill("45");
     await submit(page);
     assert.deepEqual(await summaries.allTextContents(),["奶量 45 ml · 1 次"]);
+    assert.deepEqual(await marks.allTextContents(),["12/29 · 0 ml","1/1 · 45 ml"]);
     await date.fill("2026-01-03");
     await date.dispatchEvent("change");
     await page.getByText("这天没有喂奶记录").waitFor();
     await page.getByRole("button",{name:"全部日期"}).click();
-    assert.deepEqual(await summaries.allTextContents(),["奶量 50 ml · 2 次","奶量 45 ml · 1 次"]);
+    assert.deepEqual(await summaries.allTextContents(),
+      ["奶量 50 ml · 2 次","奶量 45 ml · 1 次","奶量 0 ml · 1 次","奶量 25 ml · 1 次"]);
     await page.reload();
     await ready(page);
     await page.getByRole("button",{name:"历史奶量"}).click();
-    assert.deepEqual(await summaries.allTextContents(),["奶量 50 ml · 2 次","奶量 45 ml · 1 次"]);
+    assert.deepEqual(await marks.allTextContents(),["12/29 · 0 ml","1/1 · 45 ml","1/2 · 50 ml"]);
   } finally {
     await context.close();
   }
@@ -468,6 +486,8 @@ test(engine + " PWA: root and subpath resources, offline launch, reopen and cach
     await offline.goto(origin+prefix+"?source=pwa",{waitUntil:"domcontentloaded"});
     await ready(offline);
     assert.deepEqual(await offline.locator(".metric-number").allTextContents(),["0ml","0次","1次"]);
+    await offline.getByRole("button",{name:"历史奶量"}).click();
+    await offline.getByRole("heading",{name:"每日总奶量"}).waitFor();
     await offline.close();
     await context.setOffline(false);
 

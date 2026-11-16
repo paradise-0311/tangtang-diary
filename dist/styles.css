@@ -178,6 +178,23 @@ svg { display: block; flex-shrink: 0; }
 .trend-box path { fill: none; stroke: #83a7a1; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
 .trend-box .chart-grid { stroke: var(--line); stroke-width: 1; }
 .trend-box circle { fill: #5b827d; stroke: var(--surface); stroke-width: 3; }
+.milk-trend { padding: 12px 14px; margin: 0 0 20px; }
+.milk-trend-head { display: flex; align-items: center; justify-content: space-between; gap: 4px 8px; flex-wrap: wrap; }
+.milk-trend-head h2 { margin: 0; font-size: 16px; }
+.milk-period { display: flex; gap: 6px; }
+.milk-period button { min-height: 44px; min-width: 44px; padding-inline: 10px; color: var(--ink); }
+.milk-period button[aria-pressed="true"] { color: var(--ink-deep); background: var(--chip); border-color: var(--accent); }
+.milk-period button:hover { border-color: var(--accent); }
+.milk-trend .milk-trend-range, .milk-trend-plot figcaption { color: var(--ink); font-size: 12px; line-height: 1.45; }
+.milk-trend-range, .milk-trend-plot { font-variant-numeric: tabular-nums; }
+.milk-trend .milk-trend-empty { padding: 18px 0 8px; color: var(--ink); }
+.milk-trend-plot { margin: 6px 0 0; }
+.milk-trend-plot svg { width: 100%; height: auto; }
+.milk-trend-plot text { fill: var(--ink); font-size: 13px; }
+.milk-trend-plot line { stroke: var(--line); }
+.milk-trend-plot path { fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+.milk-trend-plot circle { fill: var(--accent); stroke: var(--surface); stroke-width: 1.5; }
+.milk-trend-plot figcaption { margin-top: 3px; }
 .settings-card { margin: 0 0 13px; overflow: hidden; }
 .settings-row { min-height: 63px; display: flex; gap: 12px; align-items: center; justify-content: space-between; width: 100%; padding: 14px 16px; text-align: left; border: none; border-bottom: 1px solid var(--line); background: transparent; color: var(--ink); }
 .settings-row:last-child { border-bottom: none; }
