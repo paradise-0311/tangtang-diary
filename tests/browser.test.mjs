@@ -124,7 +124,9 @@ test(engine + " mobile: records, refresh, CSV, new/legacy backup, cancelled or f
     assert.ok(!await field(page,"has_fortifier").isChecked());
     await page.locator("[data-amount='45']").click();
     await page.locator(".switch-row:has(#fortifier-check)").click();
-    await field(page,"fortifier_product").fill("测试增强剂");
+    assert.equal(await field(page,"fortifier_product").inputValue(),"");
+    await page.locator(".sheet-panel button[type=submit]").click();
+    await toast(page,"请填写增强剂的实际添加量");
     await field(page,"fortifier_amount").fill("0.5");
     await field(page,"fortifier_unit").selectOption("g");
     await field(page,"fortifier_note").fill("测试备注");
@@ -231,6 +233,7 @@ test(engine + " mobile: records, refresh, CSV, new/legacy backup, cancelled or f
     assert.deepEqual(backup.settings,{dark:true});
     assert.equal(backup.records.length,11);
     assert.equal(backup.records.filter(r=>r.deleted_at).length,1);
+    assert.equal(backup.records.find(r=>r.type==="bottle").payload.fortifier_product,"");
     assert.equal(backup.records.find(r=>r.type==="medication").revision,4);
     const tcb=backup.records.find(r=>r.payload.method==="TcB");
     assert.deepEqual(tcb.payload.readings,[1.2,2.1,3.4,4.5]);
@@ -240,7 +243,7 @@ test(engine + " mobile: records, refresh, CSV, new/legacy backup, cancelled or f
     assert.equal(csv.length,10);
     const feed=csv.find(row=>row["记录类型"]==="喂奶");
     for (const [heading,value] of Object.entries({"喂奶类型":"瓶喂母乳","奶量(ml)":"45","添加母乳增强剂":"是",
-      "增强剂产品":"测试增强剂","增强剂用量":"0.5","增强剂单位":"g","增强剂备注":"测试备注","备注":'测试,"\n含换行'})) {
+      "增强剂产品":"","增强剂用量":"0.5","增强剂单位":"g","增强剂备注":"测试备注","备注":'测试,"\n含换行'})) {
       assert.equal(feed[heading],value);
     }
     assert.equal(csv.find(r=>r["记录类型"]==="用药")["药品名称"],"'=测试药物");

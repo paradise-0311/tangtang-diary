@@ -297,7 +297,6 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
       </div>
       <div class="section-heading"><h2>最近记录</h2><button type="button" class="subtle-action" data-tab="records">查看全部 ${svg("arrow","icon-sm")}</button></div>
       <div class="activity-list">${recent.length ? recent.map(homeRow).join("") : '<div class="empty-state"><strong>还没有记录</strong>从上面选择一个入口开始吧</div>'}</div>
-      <div class="demo-banner">${svg("info")}<span>记录只保存在当前设备的网页存储中。请在设置页定期导出 JSON 备份。</span></div>
     </section>`;
   }
   function recordLine(r) {
@@ -367,7 +366,6 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
         ${healthCard("medication","最近用药",med ? `<small>${escapeHtml(med.payload.name)}</small>` : "",med ? formatShortDate(med.occurred_at) : "")}
       </div>
       <div class="trend-card"><h3>体重变化</h3>${trendMarkup("weight",records)}</div>
-      <div class="demo-banner">${svg("info")}<span>黄疸测量要区分经皮（TcB）和血清（TSB），并保存原始单位和时间。这里仅作记录，不提供诊断、风险分级或用药建议。</span></div>
     </section>`;
   }
   function settingsRow(iconName,label,description,right,action) {
@@ -390,7 +388,6 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
         ${settingsRow("file","导出表格（CSV）","全部记录和明细，可用 Excel 查看",svg("chevron","icon-sm"),"export-csv")}
       </div>
       <div class="settings-card">${settingsRow("history","上次发起 JSON 导出",backup ? formatShortDate(backup) : "尚未发起过完整备份导出",'<span class="pill-note">'+(backup ? "请核对文件" : "建议备份")+'</span>',"export-json")}</div>
-      <div class="settings-disclaimer"><strong>数据安全提醒</strong><br>请定期导出 JSON 文件，并确认保存到 iCloud Drive 等安全位置。导入 JSON 会先提示确认，恢复时替换此设备的现有记录。CSV 用于查看，不用于恢复。网页不会自动将数据同步到 iCloud。</div>
     </section>`;
   }
   function render() {
@@ -448,14 +445,13 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
           <div class="quick-amounts">${[30,45,60,75,90,120].map(n=>`<button type="button" class="amount-btn ${Number(amount)===n?"selected":""}" data-amount="${n}">${n} ml</button>`).join("")}</div>
           <label class="switch-row"><span><strong>本次是否添加母乳增强剂</strong><small>默认不添加，按实际情况记录</small></span><input type="checkbox" name="has_fortifier" id="fortifier-check" ${p.has_fortifier?"checked":""}/><span class="switch-ui" aria-hidden="true"></span></label>
           <div class="conditional" id="fortifier-details" ${p.has_fortifier?"":"hidden"}>
-            ${field("增强剂产品/名称","fortifier_product",p.fortifier_product||"","text",{placeholder:"按产品包装填写"})}
+            ${field("增强剂品牌（可选）","fortifier_product",p.fortifier_product||"")}
             <div class="field-row">${field("实际添加量","fortifier_amount",p.fortifier_amount??"","number",{min:0,step:"any",placeholder:"实际数值"})}
               <label class="form-field"><span>单位</span><select class="field-input" name="fortifier_unit">${optionsFor(["袋","g","ml","勺","其他"].map(x=>[x,x]),p.fortifier_unit)}</select></label></div>
-            ${field("增强剂备注","fortifier_note",p.fortifier_note||"","text",{placeholder:"按医嘱记录，可选"})}
+            ${field("增强剂备注","fortifier_note",p.fortifier_note||"")}
           </div>
           ${timeField(when)}
           ${field("本次备注","note",p.note||"","textarea",{placeholder:"如吐奶、特殊情况（可选）"})}
-          <p class="form-note">仅记录实际喂养与添加情况，不提供增强剂使用建议或剂量计算。</p>
           <button class="form-submit" type="submit">${svg("check","icon-sm")}保存喂奶记录</button>
         </form>`;
     }
@@ -492,12 +488,11 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
           <div class="age-help">根据宝宝出生时间推算，当前选择的测量时间约为生后 <strong id="age-hours">${hoursSinceBirth(when)??"—"}</strong> 小时</div>
           ${field("检测部位 / 机构（可选）","site",p.site||"","text",{placeholder:"例如 额头、医院"})}
           ${field("备注","note",p.note||"","textarea",{placeholder:"可记录报告说明"})}
-          <p class="form-note">此处仅保存测量数据，不自动判断黄疸危险程度或治疗阈值。</p>
           <button class="form-submit" type="submit">${svg("check","icon-sm")}保存黄疸记录</button>
         </form>`;
     }
     if (kind==="temperature") {
-      return `${sheetHeader(edit?"编辑体温记录":"记录一次体温","仅保存实际测量情况")}
+      return `${sheetHeader(edit?"编辑体温记录":"记录一次体温","填写温度、测量部位和时间")}
         <form id="record-form" data-kind="temperature" data-edit="${editId}">
           <label class="form-field"><span>测量温度 <small>摄氏度 ℃</small></span><div class="input-suffix"><input class="field-input" type="number" name="value" value="${escapeHtml(p.value??"")}" min="25" max="45" step="0.1" required inputmode="decimal" placeholder="输入温度"/><span>℃</span></div></label>
           ${timeField(when)}
@@ -517,15 +512,14 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
         </form>`;
     }
     if (kind==="medication") {
-      return `${sheetHeader(edit?"编辑实际用药":"记录实际用药","计划用药与已实际服用严格区分")}
+      return `${sheetHeader(edit?"编辑实际用药":"记录实际用药","填写药物名称、剂量和给药时间")}
         <form id="record-form" data-kind="medication" data-edit="${editId}">
           ${field("药物名称","name",p.name||"","text",{required:true,placeholder:"按医嘱或实际药品填写"})}
           <div class="field-row">${field("实际剂量","dose",p.dose??"","number",{required:true,min:0,step:"any",placeholder:"实际数值"})}
             ${field("剂量单位","unit",p.unit||"","text",{required:true,placeholder:"例如 ml / mg / 滴"})}</div>
           ${timeField(when)}
           ${field("给药方式（可选）","route",p.route||"","text",{placeholder:"例如 口服"})}
-          ${field("备注 / 医嘱信息","note",p.note||"","textarea",{placeholder:"记录实际发生，不自动推荐剂量"})}
-          <p class="form-note">点击保存即代表已实际给药。这里不会计算或建议药物剂量。</p>
+          ${field("备注 / 医嘱信息","note",p.note||"","textarea")}
           <button class="form-submit" type="submit">${svg("check","icon-sm")}保存实际给药记录</button>
         </form>`;
     }
@@ -595,7 +589,6 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
         <div class="field-row">${field("胎龄 · 周（可选）","gestational_weeks",p.gestational_weeks||"","number",{min:20,step:1})}
           ${field("胎龄 · 天（可选）","gestational_days",p.gestational_days||"","number",{min:0,step:1})}</div>
         ${field("出生体重 · g（可选）","birth_weight_g",p.birth_weight_g||"","number",{min:0,step:1})}
-        <p class="form-note">请按宝宝实际出生时间保存，日龄和生后小时数只作时间辅助显示。</p>
         <button type="submit" class="form-submit">${svg("check","icon-sm")}保存资料</button>
       </form>`;
   }
@@ -637,8 +630,8 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
         p.fortifier_amount=v("fortifier_amount")?Number(f.get("fortifier_amount")):"";
         p.fortifier_unit=v("fortifier_unit");
         p.fortifier_note=v("fortifier_note");
-        if (!old && (!p.fortifier_product || p.fortifier_amount==="")) {
-          return showToast("添加增强剂时，请填写产品名称和实际添加量");
+        if (!old && p.fortifier_amount==="") {
+          return showToast("请填写增强剂的实际添加量");
         }
       }
     } else if (kind==="diaper") p={kind:v("kind"),color:v("color"),note:v("note")};

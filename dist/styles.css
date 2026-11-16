@@ -186,7 +186,6 @@ svg { display: block; flex-shrink: 0; }
 .settings-label small { display: block; font-weight: 450; color: var(--muted); font-size: 11px; margin-top: 5px; }
 .settings-right { color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 5px; }
 .pill-note { background: var(--chip); padding: 6px 9px; color: var(--accent); border-radius: 20px; font-size: 11px; font-weight: 700; white-space: nowrap; }
-.settings-disclaimer { background: var(--apricot); color: #8b7458; line-height: 1.6; border-radius: 17px; font-size: 12px; padding: 15px; margin: 15px 0; }
 .toggle { width: 44px; height: 26px; border-radius: 99px; background: #c8d0cf; position: relative; display: inline-flex; align-items: center; border: none; padding: 3px; transition: background .2s; }
 .toggle:before { content:""; width:20px; height:20px; background: white; border-radius:50%; box-shadow: 0 1px 4px rgba(0,0,0,.1); transition:transform .2s; }
 .toggle.on { background: var(--accent); }
@@ -282,7 +281,6 @@ body.dark {
 .dark .tile-sage { color:#c3ddc9; }
 .dark .tile-apricot { color:#f0d0a1; }
 .dark .tile-lavender { color:#d5c7e9; }
-.dark .settings-disclaimer { color:#f1d5b2; }
 .dark .form-submit { color:#14282b; }
 .dark .toast { background:#e1eae7; color:#203b41; }
 .dark .toast button { color:#426b70; }
