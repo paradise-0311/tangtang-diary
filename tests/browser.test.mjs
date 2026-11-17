@@ -151,7 +151,12 @@ test(engine + " mobile: records, refresh, CSV, new/legacy backup, cancelled or f
     await field(page,"color").fill("测试颜色");
     await submit(page);
 
+    await btn(page,"bilirubin-history").click();
+    await page.getByRole("heading",{name:"黄疸记录",exact:true}).waitFor();
+    assert.ok(await page.getByText("暂无黄疸记录").isVisible());
+    assert.equal(await page.locator(".sheet-layer").count(),0);
     for (const [method,unit] of [["TcB","μmol/L"],["TSB","mg/dL"]]) {
+      assert.equal(await btn(page,"new-record","bilirubin").innerText(),"添加黄疸记录");
       await open(page,"bilirubin");
       if (method==="TSB") await choice(page,"method",method);
       await field(page,"unit").selectOption(unit);
@@ -167,7 +172,15 @@ test(engine + " mobile: records, refresh, CSV, new/legacy backup, cancelled or f
       await field(page,"occurred_at").fill(dates.yesterday);
       await page.locator("#age-hours").filter({hasText:"48"}).waitFor();
       await submit(page);
+      if (method==="TcB") {
+        assert.match(await lines(page).first().innerText(),/TcB · 平均 2\.8 μmol\/L/);
+        await nav(page,"today");
+        assert.match(await btn(page,"bilirubin-history").innerText(),/最近：平均 2\.8 μmol\/L/);
+        await btn(page,"bilirubin-history").click();
+      }
     }
+    assert.equal(await lines(page).count(),2);
+    await nav(page,"today");
     await open(page,"temperature");
     await field(page,"value").fill("36.7");
     await field(page,"site").selectOption("腋下");
@@ -351,6 +364,38 @@ test(engine + " mobile: existing IndexedDB is preserved and file share does not 
   }
 });
 
+test(engine + " mobile: home day refreshes at local midnight and on return", {timeout:30000}, async () => {
+  const context=await mobile();
+  try {
+    const page=await context.newPage();
+    await page.clock.install({time:new Date("2025-12-31T23:58:00+08:00")});
+    await page.goto(origin+prefix);
+    await ready(page);
+    await btn(page,"profile").click();
+    await field(page,"nickname").fill("仅测试");
+    await field(page,"born_at").fill("2025-12-31T18:35");
+    await submit(page);
+    assert.match(await page.locator(".hero-title").innerText(),/第 1 天/);
+    await open(page,"bottle");
+    await page.locator("[data-amount='45']").click();
+    await submit(page);
+    assert.deepEqual(await page.locator(".metric-number").allTextContents(),["45ml","1次","0次"]);
+
+    await page.clock.fastForward(125000);
+    assert.match(await page.locator(".hero-title").innerText(),/第 2 天/);
+    assert.match(await page.locator(".screen-title .eyebrow").innerText(),/1月1日/);
+    assert.deepEqual(await page.locator(".metric-number").allTextContents(),["0ml","0次","0次"]);
+
+    await page.clock.setSystemTime(new Date("2026-01-02T00:30:00+08:00"));
+    assert.match(await page.locator(".hero-title").innerText(),/第 2 天/);
+    await page.evaluate(()=>window.dispatchEvent(new Event("pageshow")));
+    assert.match(await page.locator(".hero-title").innerText(),/第 3 天/);
+    assert.match(await page.locator(".screen-title .eyebrow").innerText(),/1月2日/);
+  } finally {
+    await context.close();
+  }
+});
+
 test(engine + " mobile: dated milk totals and imported bilirubin batches", {timeout:60000}, async () => {
   const context=await mobile();
   try {
@@ -381,12 +426,17 @@ test(engine + " mobile: dated milk totals and imported bilirubin batches", {time
     await upload(page,{...legacy,records});
     await confirmRestore(page);
     await toast(page,"备份已恢复");
-    await page.locator('[data-filter="bilirubin"]').click();
+    await nav(page,"today");
+    await btn(page,"bilirubin-history").click();
     assert.equal(await lines(page).count(),5);
     const average = lines(page).filter({hasText:"平均"});
     assert.equal(await average.count(),1);
     assert.match(await average.innerText(),/平均 2\.05 μmol\/L/);
     assert.equal(await lines(page).filter({hasText:"132 μmol/L"}).count(),1);
+    assert.deepEqual((await page.locator(".date-heading > span:first-child").allTextContents()).map(date=>date.slice(-10)),
+      ["2026-01-02","2026-01-01"]);
+    const addButton=page.getByRole("button",{name:"添加黄疸记录"});
+    assert.equal(await addButton.evaluate(button=>!!(document.querySelector(".record-line:last-child").compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING)),true);
 
     await nav(page,"settings");
     const preserved=JSON.parse(await getBackup(page));

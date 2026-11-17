@@ -68,7 +68,7 @@ svg { display: block; flex-shrink: 0; }
 .brand-title { font-size: 17px; font-weight: 750; letter-spacing: .03em; line-height: 1.15; }
 .brand-title small { display: block; margin-top: 5px; color: var(--muted); letter-spacing: .02em; font-size: 10px; font-weight: 500; }
 .header-round { border: 1px solid var(--line); background: var(--surface); color: var(--ink); width: 38px; height: 38px; display: grid; place-items: center; border-radius: 14px; box-shadow: var(--shadow); }
-.view { min-height: 0; flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding: 10px 22px 28px; scrollbar-width: none; }
+.view { --view-bottom-space: 28px; min-height: 0; flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding: 10px 22px var(--view-bottom-space); scrollbar-width: none; }
 .view::-webkit-scrollbar { display: none; }
 .view > .screen-enter { animation: slide-in .24s ease both; }
 .bottom-nav {
@@ -112,6 +112,7 @@ svg { display: block; flex-shrink: 0; }
 .action-tile .tile-icon { width: 44px; height: 44px; border-radius: 16px; display: grid; place-items: center; background: rgba(255,255,255,.62); margin-bottom: 13px; }
 .action-tile strong { font-size: 18px; letter-spacing: -.02em; font-weight: 760; }
 .action-tile small { font-size: 11px; color: inherit; opacity: .69; margin-top: 5px; }
+[data-action="bilirubin-history"] small { position: relative; padding-right: 16px; color: var(--ink); opacity: 1; }
 .action-tile .tile-arrow { position: absolute; right: 13px; bottom: 15px; opacity: .4; }
 .tile-blue { background: var(--blue); color: #375d72; }
 .tile-sage { background: var(--sage); color: #557359; }
@@ -257,6 +258,8 @@ textarea.field-input { resize: vertical; min-height: 70px; }
 .form-note { font-size:11px; color:var(--muted); line-height:1.6; margin:12px 2px; }
 .form-submit { display:flex; align-items:center; justify-content:center; gap:8px; width:100%; padding:15px; min-height:51px; border:0; border-radius:15px; background:var(--accent); color:white; font-size:15px; font-weight:750; margin-top:22px; }
 .form-submit:active { background:var(--accent-pressed); }
+.history-add { position:sticky; bottom:calc(-1 * var(--view-bottom-space)); padding:12px 0; background:var(--bg); }
+.history-add .form-submit { margin-top:0; }
 .secondary-button { background:var(--surface); border:1px solid var(--line); color:var(--accent); font-size:13px; font-weight:700; padding:12px 15px; border-radius:13px; width:100%; margin-top:10px; }
 .diaper-options { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
 .diaper-option { border:1px solid var(--line); background:var(--surface); min-height:92px; border-radius:16px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:9px; color:var(--ink); font-weight:750; font-size:14px; }

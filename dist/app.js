@@ -41,6 +41,7 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
   };
   const app = { data: null, db: null, tab: "today", filter: "all", milkDay: "", milkPeriod: 7, toastTimer: null, saving: false,
     storageUnavailable: false, picker: null, sheetTrigger: null };
+  let renderedHomeDay = "", midnightTimer;
 
   function svg(name, extra = "") {
     return `<svg class="icon ${extra}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ICONS.info}</svg>`;
@@ -93,10 +94,20 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
     if (!Number.isFinite(born) || !Number.isFinite(when)) return null;
     return when < born ? null : Math.floor((when - born) / 36e5);
   }
-  function babyDay() {
-    const born = new Date(app.data?.profile?.born_at || "").getTime();
-    if (!Number.isFinite(born)) return "—";
-    return Math.max(1, Math.floor((Date.now() - born)/864e5) + 1);
+  function babyDay(today) {
+    const birthday = dayKey(app.data.profile.born_at || "");
+    if (!birthday) return "—";
+    // Compare local calendar dates, regardless of birth time or daylight saving.
+    const days = (Date.parse(today+"T00:00:00Z") - Date.parse(birthday+"T00:00:00Z")) / 864e5;
+    return Math.max(1, days + 1);
+  }
+  function refreshHomeDate() {
+    clearTimeout(midnightTimer);
+    const now = new Date();
+    if (app.tab === "today" && dayKey(now) !== renderedHomeDay) render();
+    const nextMidnight = new Date(now);
+    nextMidnight.setHours(24, 0, 0, 0);
+    midnightTimer = setTimeout(refreshHomeDate, nextMidnight - now);
   }
   function hasProfile() {
     return typeof app.data.profile.nickname === "string" && !!app.data.profile.nickname.trim() &&
@@ -231,6 +242,9 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
   function bilirubinValue(payload) {
     return bilirubinAverage(payload.readings) ?? payload.value ?? "—";
   }
+  function bilirubinAmount(payload) {
+    return (payload.readings ? "平均 " : "") + bilirubinValue(payload) + (payload.unit ? " " + payload.unit : "");
+  }
   function titleFor(r) {
     if (r.type === "bottle") return "喂奶";
     if (r.type === "diaper") return "更换尿布";
@@ -247,7 +261,7 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
       return `${milk} · ${p.amount_ml ?? "—"} ml${hmf}`;
     }
     if (r.type === "diaper") return ({ wet:"小便", dirty:"大便", both:"小便＋大便" })[p.kind] || "尿布";
-    if (r.type === "bilirubin") return `${p.method || "—"} · ${p.readings ? "平均 " : ""}${bilirubinValue(p)} ${p.unit || ""}`;
+    if (r.type === "bilirubin") return `${p.method || "—"} · ${bilirubinAmount(p)}`;
     if (r.type === "temperature") return `${p.value ?? "—"} ℃${p.site ? " · "+p.site : ""}`;
     if (r.type === "weight") return `${p.value ?? "—"} ${p.unit || "g"}`;
     if (r.type === "medication") return `${p.name || "未命名"} · ${p.dose ?? "—"} ${p.unit || ""}`;
@@ -267,19 +281,20 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
     </div><button type="button" class="row-trailing" data-action="record-edit" data-id="${escapeHtml(r.record_id)}" aria-label="编辑${titleFor(r)}">${svg("chevron","icon-sm")}</button></div>`;
   }
   function renderToday(records) {
-    const today = dayKey(nowISO());
+    const d = new Date();
+    const today = renderedHomeDay = dayKey(d);
     const feed = milkByDay(records).get(today) || {total:0,count:0};
     const diapers = records.filter(r=>r.type === "diaper" && dayKey(r.occurred_at) === today).length;
     const latest = records.find(r=>r.type === "bottle");
+    const latestBilirubin = records.find(r=>r.type === "bilirubin");
     const recent = records.slice(0,4);
     const nickname = escapeHtml(app.data.profile.nickname || "宝宝");
     const ready = hasProfile();
-    const d = new Date();
     const weekday = ["星期日","星期一","星期二","星期三","星期四","星期五","星期六"][d.getDay()];
     return `<section class="screen-enter">
       <div class="screen-title"><div><div class="eyebrow">${d.getMonth()+1}月${d.getDate()}日 · ${weekday}</div><h1>早安，妈妈</h1></div><button class="subtle-action" data-action="profile">${svg("edit","icon-sm")}宝宝资料</button></div>
       <div class="hero-card"><div class="hero-top"><div><span class="eyebrow">今天是新的照护日</span>
-        <div class="hero-title">${ready ? `${nickname} · 第 ${babyDay()} 天` : nickname}</div>
+        <div class="hero-title">${ready ? `${nickname} · 第 ${babyDay(today)} 天` : nickname}</div>
         <p class="hero-sub">${ready ? "记录好每一次喂养和测量" : "请填写宝宝昵称和准确出生时间；已有备份可到设置导入。"}</p></div><div class="avatar-baby">${svg("baby","icon-xl")}</div></div>
         <div class="metric-row">
           <div class="metric"><span class="metric-label">今日奶量</span><span class="metric-number">${formatMilk(feed.total)}<small>ml</small></span></div>
@@ -288,11 +303,11 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
         </div>
         <button type="button" class="subtle-action milk-history-link" data-action="milk-history">历史奶量 ${svg("arrow","icon-sm")}</button>
       </div>
-      <div class="section-heading"><h2>快速记录</h2><span class="hint">点击即可添加</span></div>
+      <div class="section-heading"><h2>快速记录</h2><span class="hint">点击查看或添加</span></div>
       <div class="action-grid">
         <button type="button" class="action-tile tile-blue" data-action="new-record" data-kind="bottle"><span class="tile-icon">${svg("bottle","icon-lg")}</span><strong>喂奶</strong><small>${latest ? "上次 "+formatTime(latest.occurred_at)+" · "+escapeHtml(latest.payload.amount_ml)+" ml" : "记录本次奶量"}</small>${svg("arrow","tile-arrow icon-sm")}</button>
         <button type="button" class="action-tile tile-sage" data-action="new-record" data-kind="diaper"><span class="tile-icon">${svg("diaper","icon-lg")}</span><strong>尿布</strong><small>小便 / 大便 / 都有</small>${svg("arrow","tile-arrow icon-sm")}</button>
-        <button type="button" class="action-tile tile-apricot" data-action="new-record" data-kind="bilirubin"><span class="tile-icon">${svg("bilirubin","icon-lg")}</span><strong>黄疸</strong><small>检测数值与时间</small>${svg("arrow","tile-arrow icon-sm")}</button>
+        <button type="button" class="action-tile tile-apricot" data-action="bilirubin-history"><span class="tile-icon">${svg("bilirubin","icon-lg")}</span><strong>黄疸</strong><small>${latestBilirubin ? "最近："+escapeHtml(bilirubinAmount(latestBilirubin.payload)) : "查看历次测量"}</small>${svg("arrow","tile-arrow icon-sm")}</button>
         <button type="button" class="action-tile tile-lavender" data-action="new-record" data-kind="temperature"><span class="tile-icon">${svg("temperature","icon-lg")}</span><strong>体温</strong><small>最近一次测量</small>${svg("arrow","tile-arrow icon-sm")}</button>
       </div>
       <div class="section-heading"><h2>最近记录</h2><button type="button" class="subtle-action" data-tab="records">查看全部 ${svg("arrow","icon-sm")}</button></div>
@@ -367,6 +382,7 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
   function renderRecords(records) {
     const chips = [["all","全部"],...RECORD_TYPES.map((t) => [t,TYPE_LABELS[t]])];
     const showingMilk = app.filter === "bottle";
+    const showingBilirubin = app.filter === "bilirubin";
     const list = records.filter(r=>(app.filter === "all" || r.type === app.filter) &&
       (!showingMilk || !app.milkDay || dayKey(r.occurred_at) === app.milkDay));
     const dailyMilk = milkByDay(records);
@@ -383,19 +399,20 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
       html += recordLine(r);
     }
     if (last !== null) html += "</div>";
-    const missing = showingMilk ? "这天没有喂奶记录" : "暂无这类记录";
+    const missing = showingMilk ? "这天没有喂奶记录" : showingBilirubin ? "暂无黄疸记录" : "暂无这类记录";
     const empty = showingMilk && !app.milkDay ? "" : `<div class="activity-list"><div class="empty-state">
       ${svg("history","icon-xl")}<strong>${missing}</strong>
-      ${showingMilk ? "可在今天页补记喂奶" : "可在今天或健康页面添加记录"}</div></div>`;
+      ${showingMilk ? "可在今天页补记喂奶" : showingBilirubin ? "" : "可在今天或健康页面添加记录"}</div></div>`;
     const today = dayKey(nowISO());
     const chartEnd = app.milkDay || dailyMilk.keys().next().value || today;
-    return `<section class="screen-enter"><div class="screen-title"><div><div class="eyebrow">可补记 · 可修改 · 可撤销</div><h1>${showingMilk?"历史奶量":"记录时间线"}</h1></div></div>
+    return `<section class="screen-enter"><div class="screen-title"><div><div class="eyebrow">可补记 · 可修改 · 可撤销</div><h1>${showingMilk ? "历史奶量" : showingBilirubin ? "黄疸记录" : "记录时间线"}</h1></div></div>
       <div class="filter-chips">${chips.map(([k,l])=>`<button type="button" class="filter-chip ${app.filter===k?"active":""}" data-filter="${k}" aria-pressed="${app.filter===k}">${l}</button>`).join("")}</div>
       ${showingMilk ? `<div class="milk-date-filter"><label class="form-field"><span>按日期查看</span>
         <input type="date" class="field-input" id="milk-date" value="${escapeHtml(app.milkDay)}" max="${today}"/></label>
         ${app.milkDay ? '<button type="button" class="subtle-action" data-action="milk-date-clear">全部日期</button>' : ""}</div>
         ${milkTrendMarkup(dailyMilk,chartEnd,app.milkPeriod)}` : ""}
       ${html || empty}
+      ${showingBilirubin ? `<div class="history-add"><button type="button" class="form-submit" data-action="new-record" data-kind="bilirubin">${svg("plus","icon-sm")}添加黄疸记录</button></div>` : ""}
     </section>`;
   }
   function healthCard(type, label, value, note) {
@@ -892,6 +909,10 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
     const name=action.dataset.action;
     if (name==="close-sheet") return closeSheet();
     if (name==="home") return switchTab("today");
+    if (name==="bilirubin-history") {
+      app.filter = "bilirubin";
+      return switchTab("records");
+    }
     if (name==="milk-history") {
       app.filter = "bottle";
       app.milkDay = "";
@@ -942,6 +963,11 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
   });
   window.visualViewport?.addEventListener("resize",syncSheetViewport);
   window.visualViewport?.addEventListener("scroll",syncSheetViewport);
+  window.addEventListener("focus",refreshHomeDate);
+  window.addEventListener("pageshow",refreshHomeDate);
+  document.addEventListener("visibilitychange",()=>{
+    if (document.visibilityState === "visible") refreshHomeDate();
+  });
   async function init() {
     try {
       if (!("indexedDB" in window)) throw new Error("IndexedDB unavailable");
@@ -957,6 +983,7 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
       app.data=emptyData(); app.storageUnavailable=true;
     }
     render();
+    refreshHomeDate();
     if ("serviceWorker" in navigator && window.isSecureContext) {
       navigator.serviceWorker.register(new URL("./sw.js",import.meta.url), {
         scope:new URL("./",import.meta.url).href,
