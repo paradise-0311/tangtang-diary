@@ -249,9 +249,14 @@ textarea.field-input { resize: vertical; min-height: 70px; }
 .switch-row input:checked + .switch-ui { background:var(--accent); }
 .switch-row input:checked + .switch-ui:after { transform:translateX(19px); }
 .switch-row:focus-within { outline:2px solid #99b9be; outline-offset:2px; }
-.conditional { border-left: 3px solid #aac3be; margin: 11px 0 16px; padding-left: 13px; }
-.conditional[hidden] { display:none; }
 .bilirubin-values { border: 0; margin: 0; padding: 0; min-inline-size: 0; }
+.bilirubin-values legend { padding:0; color:var(--ink); font-size:13px; font-weight:650; margin-bottom:12px; }
+.bilirubin-reading { display:flex; align-items:flex-end; gap:10px; }
+.bilirubin-reading .form-field { flex:1; min-width:0; margin-bottom:12px; }
+.reading-remove { flex:none; width:44px; height:48px; margin-bottom:12px; padding:0; display:grid; place-items:center; border:0; border-radius:13px; color:var(--accent); background:var(--surface-quiet); }
+.reading-remove:disabled { opacity:.4; }
+.reading-add { display:flex; align-items:center; justify-content:center; gap:8px; margin-top:0; }
+#bilirubin-values .age-help { color:var(--ink); font-variant-numeric:tabular-nums; }
 #bilirubin-average { font-weight: 750; }
 .diaper-detail-form { margin-top:15px; }
 [hidden] { display:none !important; }

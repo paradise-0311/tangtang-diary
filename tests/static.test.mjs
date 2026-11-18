@@ -87,7 +87,7 @@ test("CSV escapes quotes, commas and line breaks while protecting spreadsheet ce
   }
 });
 
-test("four original bilirubin readings remain in a version-one backup", () => {
+test("variable bilirubin readings and simplified fortifier records roundtrip in version-one backups", () => {
   const original = olderRecords.find(record=>record.type==="bilirubin");
   const readings = [2,"2.1",2,"2.1"];
   assert.equal(bilirubinAverage(readings),2.05);
@@ -95,8 +95,16 @@ test("four original bilirubin readings remain in a version-one backup", () => {
   const record = {...original,payload:{...original.payload,readings,value:2.05}};
   const saved = makeBackup(validateBackup({...legacy,records:[record]}),time);
   assert.deepEqual(validateBackup(saved).records,[record]);
-  for (const invalid of [[1,2,3],[1,2,3,""],[1,2,3,-1],[1,2,3,Infinity],new Array(4)]) {
+  for (const [readings,value] of [[[0],0],[[1,2,3],2],[[1,2,3,4,5],3],[[2,"2.1",2,"2.1"],2.05]]) {
+    assert.equal(bilirubinAverage(readings),value);
+    const changed={...record,payload:{...record.payload,readings,value}};
+    assert.deepEqual(validateBackup(makeBackup(validateBackup({...legacy,records:[changed]}),time)).records,[changed]);
+  }
+  for (const invalid of [[],null,[1,2,3,""],[1,2,3,-1],[1,2,3,Infinity],new Array(4),[null],[true]]) {
     assert.equal(bilirubinAverage(invalid),null);
     assert.throws(()=>validateBackup({...saved,records:[{...record,payload:{...record.payload,readings:invalid}}]}),/内容/);
   }
+  const bottle={...olderRecords.find(record=>record.type==="bottle"),
+    payload:{milk_type:"expressed",amount_ml:45,has_fortifier:true}};
+  assert.deepEqual(validateBackup({...legacy,records:[bottle]}).records,[bottle]);
 });

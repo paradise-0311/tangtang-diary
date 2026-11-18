@@ -257,7 +257,7 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
     const p = r.payload || {};
     if (r.type === "bottle") {
       const milk = { expressed:"瓶喂母乳", formula:"配方奶", mixed:"混合奶" }[p.milk_type] || "瓶喂";
-      const hmf = p.has_fortifier ? ` · 已添加增强剂${p.fortifier_product ? "（"+p.fortifier_product+"）" : ""}` : "";
+      const hmf = p.has_fortifier ? " · 已添加增强剂" : "";
       return `${milk} · ${p.amount_ml ?? "—"} ml${hmf}`;
     }
     if (r.type === "diaper") return ({ wet:"小便", dirty:"大便", both:"小便＋大便" })[p.kind] || "尿布";
@@ -511,6 +511,24 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
     return list.map(([value,label])=>`<option value="${escapeHtml(value)}" ${value===selected?"selected":""}>${escapeHtml(label)}</option>`).join("");
   }
   function timeField(when) { return field("发生时间","occurred_at",localInput(when),"datetime-local",{required:true}); }
+  function bilirubinReadingRow(value, index) {
+    return `<div class="bilirubin-reading">${field(`第 ${index+1} 次`,"reading",value,"number",{min:0,step:"any"})}
+      <button type="button" class="reading-remove" data-action="reading-remove" aria-label="移除第 ${index+1} 次测量">${svg("close","icon-sm")}</button></div>`;
+  }
+  function updateBilirubinReadings() {
+    const rows = [...document.querySelectorAll(".bilirubin-reading")];
+    rows.forEach((row,index)=>{
+      row.querySelector(".form-field > span").textContent = `第 ${index+1} 次`;
+      const remove = row.querySelector(".reading-remove");
+      remove.setAttribute("aria-label",`移除第 ${index+1} 次测量`);
+      remove.disabled = rows.length === 1;
+    });
+    const inputs = rows.map(row=>row.querySelector("input"));
+    const readings = inputs.map(input=>input.value).filter(value=>value.trim() !== "");
+    const average = inputs.every(input=>input.validity.valid) ? bilirubinAverage(readings) : null;
+    document.getElementById("bilirubin-average").textContent = average ?? "—";
+    document.getElementById("bilirubin-count").textContent = `（已填 ${readings.length} 次）`;
+  }
   function sheetHeader(title,sub) {
     return `<div class="sheet-handle"></div><div class="sheet-head"><div><h2>${title}</h2><p>${sub}</p></div><button type="button" class="close-button" data-action="close-sheet" aria-label="关闭">${svg("close","icon-sm")}</button></div>`;
   }
@@ -525,12 +543,6 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
           <label class="form-field"><span>实际喝入量 <small>毫升 ml</small></span><div class="input-suffix"><input class="field-input" id="milk-amount" type="number" name="amount_ml" value="${escapeHtml(amount)}" min="0" max="1500" step="1" required inputmode="numeric" placeholder="例如 45"/><span>ml</span></div></label>
           <div class="quick-amounts">${[30,45,60,75,90,120].map(n=>`<button type="button" class="amount-btn ${Number(amount)===n?"selected":""}" data-amount="${n}">${n} ml</button>`).join("")}</div>
           <label class="switch-row"><span><strong>本次是否添加母乳增强剂</strong><small>默认不添加，按实际情况记录</small></span><input type="checkbox" name="has_fortifier" id="fortifier-check" ${p.has_fortifier?"checked":""}/><span class="switch-ui" aria-hidden="true"></span></label>
-          <div class="conditional" id="fortifier-details" ${p.has_fortifier?"":"hidden"}>
-            ${field("增强剂品牌（可选）","fortifier_product",p.fortifier_product||"")}
-            <div class="field-row">${field("实际添加量","fortifier_amount",p.fortifier_amount??"","number",{min:0,step:"any",placeholder:"实际数值"})}
-              <label class="form-field"><span>单位</span><select class="field-input" name="fortifier_unit">${optionsFor(["袋","g","ml","勺","其他"].map(x=>[x,x]),p.fortifier_unit)}</select></label></div>
-            ${field("增强剂备注","fortifier_note",p.fortifier_note||"")}
-          </div>
           ${timeField(when)}
           ${field("本次备注","note",p.note||"","textarea",{placeholder:"如吐奶、特殊情况（可选）"})}
           <button class="form-submit" type="submit">${svg("check","icon-sm")}保存喂奶记录</button>
@@ -549,20 +561,15 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
         </form>`;
     }
     if (kind==="bilirubin") {
-      const readings = p.readings || ["","","",""];
-      const showFour = !edit || !!p.readings;
-      const numericOptions = {required:true,min:0,step:"any"};
-      const inputs = readings.map((value,index)=>field(`第 ${index+1} 次`,"reading",value,"number",numericOptions));
+      const readings = p.readings || [p.value ?? ""];
       return `${sheetHeader(edit?"编辑黄疸记录":"记录黄疸检测","保留检测方式、原始单位和测量时间")}
         <form id="record-form" data-kind="bilirubin" data-edit="${editId}">
           <div class="form-field"><span>检测方式</span>${choice("method",p.method||"TcB",[["TcB","经皮 TcB"],["TSB","血清 TSB"]],2)}</div>
-          <fieldset class="bilirubin-values" id="bilirubin-four" ${showFour?"":"hidden disabled"}>
-            <div class="field-row">${inputs.slice(0,2).join("")}</div>
-            <div class="field-row">${inputs.slice(2).join("")}</div>
-            <div class="age-help">四次平均值 <output id="bilirubin-average" aria-live="polite">${bilirubinAverage(readings) ?? "—"}</output></div>
-          </fieldset>
-          <fieldset class="bilirubin-values" id="bilirubin-single" ${showFour?"hidden disabled":""}>
-            ${field("测量数值","value",p.value??"","number",numericOptions)}
+          <fieldset class="bilirubin-values" id="bilirubin-values">
+            <legend>测量读数</legend>
+            <div id="bilirubin-readings">${readings.map(bilirubinReadingRow).join("")}</div>
+            <button type="button" class="secondary-button reading-add" data-action="reading-add">${svg("plus","icon-sm")}添加一次测量</button>
+            <div class="age-help">平均值 <output id="bilirubin-average" aria-live="polite">${bilirubinAverage(readings) ?? "—"}</output><span id="bilirubin-count"></span></div>
           </fieldset>
           <label class="form-field"><span>原始单位</span><select class="field-input" name="unit">${optionsFor([["μmol/L","μmol/L"],["mg/dL","mg/dL"]],p.unit)}</select></label>
           ${timeField(when)}
@@ -631,22 +638,9 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
     showSheet(isProfile?"宝宝资料":TYPE_LABELS[kind]||"记录", content);
     const form=document.getElementById("record-form")||document.getElementById("profile-form");
     if (form) form.addEventListener("submit", isProfile ? submitProfile : submitRecord);
-    document.getElementById("fortifier-check")?.addEventListener("change", e=>{
-      document.getElementById("fortifier-details").hidden=!e.target.checked;
-    });
     if (kind === "bilirubin") {
-      const four = document.getElementById("bilirubin-four");
-      const single = document.getElementById("bilirubin-single");
-      four.addEventListener("input",()=>{
-        const readings = [...four.querySelectorAll('input[name="reading"]')].map(input=>input.value);
-        document.getElementById("bilirubin-average").textContent = bilirubinAverage(readings) ?? "—";
-      });
-      if (!record) form.addEventListener("change",event=>{
-        if (event.target.name !== "method") return;
-        const isTranscutaneous = event.target.value === "TcB";
-        four.hidden = four.disabled = !isTranscutaneous;
-        single.hidden = single.disabled = isTranscutaneous;
-      });
+      document.getElementById("bilirubin-readings").addEventListener("input",updateBilirubinReadings);
+      updateBilirubinReadings();
     }
     const timeInput=document.querySelector('#record-form input[name="occurred_at"]');
     const updateAge=e=>{
@@ -704,27 +698,17 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
     if (kind==="bottle") {
       p={ milk_type:v("milk_type"), amount_ml:Number(f.get("amount_ml")),
         has_fortifier: !!f.get("has_fortifier"),
-        fortifier_product:"", fortifier_amount:"", fortifier_unit:"", fortifier_note:"",
         note:v("note") };
-      if (p.has_fortifier) {
-        p.fortifier_product=v("fortifier_product");
-        p.fortifier_amount=v("fortifier_amount")?Number(f.get("fortifier_amount")):"";
-        p.fortifier_unit=v("fortifier_unit");
-        p.fortifier_note=v("fortifier_note");
-        if (!old && p.fortifier_amount==="") {
-          return showToast("请填写增强剂的实际添加量");
-        }
-      }
     } else if (kind==="diaper") p={kind:v("kind"),color:v("color"),note:v("note")};
     else if (kind==="bilirubin") {
-      p={method:v("method"),value:Number(f.get("value")),unit:v("unit"),site:v("site"),note:v("note")};
-      const readings = f.getAll("reading");
-      if (readings.length) {
-        const average = bilirubinAverage(readings);
-        if (average === null) return showToast("请填写四个有效的读数");
-        p.value = average;
-        p.readings = readings.map(Number);
+      const readings = f.getAll("reading").filter(value=>value.trim() !== "");
+      const average = bilirubinAverage(readings);
+      if (average === null) {
+        showToast("请填写至少一个有效的读数");
+        form.querySelector('input[name="reading"]').focus();
+        return;
       }
+      p={method:v("method"),value:average,readings:readings.map(Number),unit:v("unit"),site:v("site"),note:v("note")};
     }
     else if (kind==="temperature") p={value:Number(f.get("value")),site:v("site"),note:v("note")};
     else if (kind==="weight") p={value:Number(f.get("value")),unit:v("unit"),note:v("note")};
@@ -741,7 +725,10 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
       const position = ids.indexOf(r.record_id);
       if (position < 0) return r;
       const payload = {...r.payload,...p};
-      if (old.groupIds) {
+      if (old.groupIds && p.readings.length !== ids.length) {
+        // Keep old source rows in the backup when a legacy four-reading batch changes size.
+        if (position > 0) return {...r,deleted_at:time,updated_at:time,revision:(r.revision||1)+1};
+      } else if (old.groupIds) {
         payload.value = p.readings[position];
         delete payload.readings;
         payload.measurement_group = ids[0];
@@ -908,6 +895,22 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
     const action=event.target.closest("[data-action]");if(!action)return;
     const name=action.dataset.action;
     if (name==="close-sheet") return closeSheet();
+    if (name==="reading-add") {
+      const list = document.getElementById("bilirubin-readings");
+      list.insertAdjacentHTML("beforeend",bilirubinReadingRow("",list.children.length));
+      updateBilirubinReadings();
+      list.lastElementChild.querySelector("input").focus();
+      return;
+    }
+    if (name==="reading-remove") {
+      const row = action.closest(".bilirubin-reading");
+      if (row.parentElement.children.length <= 1) return;
+      const next = row.nextElementSibling || row.previousElementSibling;
+      row.remove();
+      updateBilirubinReadings();
+      next.querySelector("input").focus();
+      return;
+    }
     if (name==="home") return switchTab("today");
     if (name==="bilirubin-history") {
       app.filter = "bilirubin";

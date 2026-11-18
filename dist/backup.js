@@ -15,7 +15,7 @@ const numeric = value => (typeof value === "number" || filled(value) &&
 const optionalNumeric = value => empty(value) || numeric(value);
 
 export function bilirubinAverage(readings) {
-  if (!Array.isArray(readings) || readings.length !== 4 || ![...readings].every(numeric)) return null;
+  if (!Array.isArray(readings) || readings.length === 0 || ![...readings].every(numeric)) return null;
   const average = readings.reduce((sum, reading) => sum + Number(reading) / readings.length, 0);
   return Number(average.toFixed(2));
 }
