@@ -159,7 +159,7 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
         ? new Error("该网页已在其他窗口更新，请重新打开后再试") : new Error("本机写入失败"));
     });
   }
-  async function saveAndRender(next, message, {close = false, tab, failure = "未能保存，原有数据仍保留。"} = {}) {
+  async function saveAndRender(next, message, {close = false, tab, resetHistory = false, failure = "未能保存，原有数据仍保留。"} = {}) {
     if (app.saving) return false;
     if (app.storageUnavailable || !app.db) {
       showToast("本机存储不可用，无法保存。请重新打开后再试。");
@@ -180,6 +180,8 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
     if (tab) {
       app.tab = tab;
       app.filter = "all";
+    }
+    if (tab || resetHistory) {
       app.milkDay = "";
       document.getElementById("view").scrollTop = 0;
     }
@@ -285,8 +287,6 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
     const today = renderedHomeDay = dayKey(d);
     const feed = milkByDay(records).get(today) || {total:0,count:0};
     const diapers = records.filter(r=>r.type === "diaper" && dayKey(r.occurred_at) === today).length;
-    const latest = records.find(r=>r.type === "bottle");
-    const latestBilirubin = records.find(r=>r.type === "bilirubin");
     const recent = records.slice(0,4);
     const nickname = escapeHtml(app.data.profile.nickname || "宝宝");
     const ready = hasProfile();
@@ -303,12 +303,17 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
         </div>
         <button type="button" class="subtle-action milk-history-link" data-action="milk-history">历史奶量 ${svg("arrow","icon-sm")}</button>
       </div>
-      <div class="section-heading"><h2>快速记录</h2><span class="hint">点击查看或添加</span></div>
+      <div class="section-heading"><h2>照护记录</h2><span class="hint">查看历史 · 添加记录</span></div>
       <div class="action-grid">
-        <button type="button" class="action-tile tile-blue" data-action="new-record" data-kind="bottle"><span class="tile-icon">${svg("bottle","icon-lg")}</span><strong>喂奶</strong><small>${latest ? "上次 "+formatTime(latest.occurred_at)+" · "+escapeHtml(latest.payload.amount_ml)+" ml" : "记录本次奶量"}</small>${svg("arrow","tile-arrow icon-sm")}</button>
-        <button type="button" class="action-tile tile-sage" data-action="new-record" data-kind="diaper"><span class="tile-icon">${svg("diaper","icon-lg")}</span><strong>尿布</strong><small>小便 / 大便 / 都有</small>${svg("arrow","tile-arrow icon-sm")}</button>
-        <button type="button" class="action-tile tile-apricot" data-action="bilirubin-history"><span class="tile-icon">${svg("bilirubin","icon-lg")}</span><strong>黄疸</strong><small>${latestBilirubin ? "最近："+escapeHtml(bilirubinAmount(latestBilirubin.payload)) : "查看历次测量"}</small>${svg("arrow","tile-arrow icon-sm")}</button>
-        <button type="button" class="action-tile tile-lavender" data-action="new-record" data-kind="temperature"><span class="tile-icon">${svg("temperature","icon-lg")}</span><strong>体温</strong><small>最近一次测量</small>${svg("arrow","tile-arrow icon-sm")}</button>
+        ${[["bottle","blue"],["diaper","sage"],["bilirubin","apricot"],["temperature","lavender"]].map(([kind,color])=>{
+          const latest = records.find(record=>record.type===kind);
+          const p = latest?.payload || {};
+          const summary = !latest ? "暂无记录" : kind==="bottle" ? `${p.amount_ml} ml${p.has_fortifier ? " · 已加增强剂" : ""}` :
+            kind==="diaper" ? detailFor(latest)+(p.color ? " · "+p.color : "") :
+            kind==="bilirubin" ? bilirubinAmount(p) : `${p.value} ℃`;
+          return `<button type="button" class="action-tile tile-${color}" data-action="record-history" data-kind="${kind}"><span class="tile-icon">${svg(kind)}</span><strong>${TYPE_LABELS[kind]}</strong>${svg("chevron","tile-arrow icon-sm")}
+            <small class="tile-value">${escapeHtml(summary)}</small>${latest ? `<small class="tile-time">${dayTitle(latest.occurred_at)} ${formatTime(latest.occurred_at)}</small>` : ""}</button>`;
+        }).join("")}
       </div>
       <div class="section-heading"><h2>最近记录</h2><button type="button" class="subtle-action" data-tab="records">查看全部 ${svg("arrow","icon-sm")}</button></div>
       <div class="activity-list">${recent.length ? recent.map(homeRow).join("") : '<div class="empty-state"><strong>还没有记录</strong>从上面选择一个入口开始吧</div>'}</div>
@@ -381,8 +386,8 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
   }
   function renderRecords(records) {
     const chips = [["all","全部"],...RECORD_TYPES.map((t) => [t,TYPE_LABELS[t]])];
+    const recordKind = RECORD_TYPES.includes(app.filter) ? app.filter : null;
     const showingMilk = app.filter === "bottle";
-    const showingBilirubin = app.filter === "bilirubin";
     const list = records.filter(r=>(app.filter === "all" || r.type === app.filter) &&
       (!showingMilk || !app.milkDay || dayKey(r.occurred_at) === app.milkDay));
     const dailyMilk = milkByDay(records);
@@ -399,20 +404,20 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
       html += recordLine(r);
     }
     if (last !== null) html += "</div>";
-    const missing = showingMilk ? "这天没有喂奶记录" : showingBilirubin ? "暂无黄疸记录" : "暂无这类记录";
+    const missing = showingMilk && app.milkDay ? "这天没有喂奶记录" : recordKind ? `暂无${TYPE_LABELS[recordKind]}记录` : "暂无这类记录";
     const empty = showingMilk && !app.milkDay ? "" : `<div class="activity-list"><div class="empty-state">
       ${svg("history","icon-xl")}<strong>${missing}</strong>
-      ${showingMilk ? "可在今天页补记喂奶" : showingBilirubin ? "" : "可在今天或健康页面添加记录"}</div></div>`;
+      ${recordKind ? "" : "选择记录类型后可添加记录"}</div></div>`;
     const today = dayKey(nowISO());
     const chartEnd = app.milkDay || dailyMilk.keys().next().value || today;
-    return `<section class="screen-enter"><div class="screen-title"><div><div class="eyebrow">可补记 · 可修改 · 可撤销</div><h1>${showingMilk ? "历史奶量" : showingBilirubin ? "黄疸记录" : "记录时间线"}</h1></div></div>
+    return `<section class="screen-enter"><div class="screen-title"><div><div class="eyebrow">可补记 · 可修改 · 可撤销</div><h1>${showingMilk ? "历史奶量" : recordKind ? TYPE_LABELS[recordKind]+"记录" : "记录时间线"}</h1></div></div>
       <div class="filter-chips">${chips.map(([k,l])=>`<button type="button" class="filter-chip ${app.filter===k?"active":""}" data-filter="${k}" aria-pressed="${app.filter===k}">${l}</button>`).join("")}</div>
       ${showingMilk ? `<div class="milk-date-filter"><label class="form-field"><span>按日期查看</span>
         <input type="date" class="field-input" id="milk-date" value="${escapeHtml(app.milkDay)}" max="${today}"/></label>
-        ${app.milkDay ? '<button type="button" class="subtle-action" data-action="milk-date-clear">全部日期</button>' : ""}</div>
-        ${milkTrendMarkup(dailyMilk,chartEnd,app.milkPeriod)}` : ""}
+        ${app.milkDay ? '<button type="button" class="subtle-action" data-action="milk-date-clear">全部日期</button>' : ""}</div>` : ""}
       ${html || empty}
-      ${showingBilirubin ? `<div class="history-add"><button type="button" class="form-submit" data-action="new-record" data-kind="bilirubin">${svg("plus","icon-sm")}添加黄疸记录</button></div>` : ""}
+      ${showingMilk ? milkTrendMarkup(dailyMilk,chartEnd,app.milkPeriod) : ""}
+      ${recordKind ? `<div class="history-add"><button type="button" class="form-submit" data-action="new-record" data-kind="${recordKind}">${svg("plus","icon-sm")}添加${TYPE_LABELS[recordKind]}记录</button></div>` : ""}
     </section>`;
   }
   function healthCard(type, label, value, note) {
@@ -737,7 +742,8 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
       return {...r,payload,occurred_at:when,updated_at:time,revision:(r.revision||1)+1};
     }) :
       [...app.data.records,{record_id:id(),type:kind,payload:p,occurred_at:when,created_at:time,updated_at:time,revision:1,deleted_at:null}];
-    await saveAndRender({...app.data,records},old?"记录已更新":"已保存记录",{close:true});
+    await saveAndRender({...app.data,records},old?"记录已更新":"已保存记录",
+      {close:true,resetHistory:!old && app.tab==="records" && app.filter===kind});
   }
   function changeDeleted(recordIds, deletedAt, message) {
     const records=app.data.records.map(r=>recordIds.includes(r.record_id) ? {...r,deleted_at:deletedAt,
@@ -748,7 +754,7 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
     if (app.data.records.length >= RECORD_LIMIT) return showToast("已达到记录条数上限，请先备份");
     const time=nowISO();
     const rec={record_id:id(),type:"diaper",payload:{kind,color:"",note:""},occurred_at:time,created_at:time,updated_at:time,revision:1,deleted_at:null};
-    if (await saveAndRender({...app.data,records:[...app.data.records,rec]},null,{close:true})) {
+    if (await saveAndRender({...app.data,records:[...app.data.records,rec]},null,{close:true,resetHistory:app.tab==="records"})) {
       showToast("尿布已记录","撤销",()=>changeDeleted([rec.record_id],nowISO(),"已撤销"));
     }
   }
@@ -912,14 +918,18 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
       return;
     }
     if (name==="home") return switchTab("today");
-    if (name==="bilirubin-history") {
-      app.filter = "bilirubin";
+    if (name==="record-history") {
+      if (!RECORD_TYPES.includes(action.dataset.kind)) return;
+      app.filter = action.dataset.kind;
+      app.milkDay = "";
       return switchTab("records");
     }
     if (name==="milk-history") {
       app.filter = "bottle";
       app.milkDay = "";
-      return switchTab("records");
+      switchTab("records");
+      document.querySelector(".milk-trend").scrollIntoView({block:"start"});
+      return;
     }
     if (name==="milk-date-clear") {
       app.milkDay = "";

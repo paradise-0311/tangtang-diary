@@ -28,7 +28,8 @@ before(async () => {
     const file=base.pathname.slice(dir.length) || "index.html";
     if (!clean.includes(file)) {res.writeHead(404).end(); return;}
     try {
-      const data=await readFile(join(served,file));
+      // Upgrade the project path independently; the root app is a different scope.
+      const data=await readFile(join(dir===prefix ? served : original,file));
       res.writeHead(200,{"Content-Type":MIME[file.split(".").at(-1)],"Cache-Control":"no-store"}).end(data);
     } catch { res.writeHead(404).end(); }
   });
@@ -50,7 +51,13 @@ const field = (page,name) => page.locator('#sheet-root [name="'+name+'"]');
 const choice = (page,name,value) => page.locator('label:has(input[name="'+name+'"][value="'+value+'"])').click();
 const toast = (page,text) => page.locator("#toast-root .toast").filter({hasText:text}).waitFor();
 const ready = page => page.getByRole("heading",{name:"早安，妈妈"}).waitFor();
-const open = (page,kind) => btn(page,"new-record",kind).click();
+const open = async (page,kind) => {
+  if (!await btn(page,"new-record",kind).count()) {
+    await nav(page,"today");
+    await btn(page,"record-history",kind).click();
+  }
+  await btn(page,"new-record",kind).click();
+};
 const lines = page => page.locator(".record-line");
 const submit = async page => {
   await page.locator(".sheet-panel button[type=submit]").click();
@@ -104,6 +111,16 @@ test(engine + " mobile: records, refresh, CSV, new/legacy backup, cancelled or f
     assert.equal(new URL(page.url()).pathname,prefix);
     assert.deepEqual(await page.locator(".metric-number").allTextContents(),["0ml","0次","0次"]);
     assert.deepEqual(await page.locator(".action-tile strong").allTextContents(),["喂奶","尿布","黄疸","体温"]);
+    assert.deepEqual(await page.locator(".action-tile .tile-value").allTextContents(),Array(4).fill("暂无记录"));
+    for (const [kind,title] of [["bottle","历史奶量"],["diaper","尿布记录"],["bilirubin","黄疸记录"],["temperature","体温记录"]]) {
+      await btn(page,"record-history",kind).click();
+      await page.getByRole("heading",{name:title,exact:true}).waitFor();
+      assert.equal(await page.locator(".sheet-layer").count(),0);
+      assert.equal(await lines(page).count(),0);
+      assert.equal(await page.locator(".filter-chip.active").getAttribute("data-filter"),kind);
+      assert.ok(await btn(page,"new-record",kind).isVisible());
+      await nav(page,"today");
+    }
     assert.match(await page.locator("#view").innerText(),/还没有记录.*|请填写宝宝昵称/);
     assert.equal(await page.locator(".activity-row").count(),0);
     await btn(page,"profile").click();
@@ -127,7 +144,11 @@ test(engine + " mobile: records, refresh, CSV, new/legacy backup, cancelled or f
     assert.equal(await page.locator('#sheet-root [name^="fortifier_"]').count(),0);
     await field(page,"note").fill('测试,"\n含换行');
     await submit(page);
+    assert.match(await lines(page).first().innerText(),/瓶喂母乳 · 45 ml · 已添加增强剂/);
+    await nav(page,"today");
     assert.deepEqual(await page.locator(".metric-number").allTextContents(),["45ml","1次","0次"]);
+    assert.equal(await btn(page,"record-history","bottle").locator(".tile-value").innerText(),"45 ml · 已加增强剂");
+    assert.match(await btn(page,"record-history","bottle").locator(".tile-time").innerText(),/^今天 \d{2}:\d{2}$/);
     await open(page,"bottle");
     assert.ok(!await field(page,"has_fortifier").isChecked());
     await btn(page,"close-sheet").click();
@@ -137,7 +158,9 @@ test(engine + " mobile: records, refresh, CSV, new/legacy backup, cancelled or f
       await page.locator('[data-diaper-quick="'+kind+'"]').click();
       await page.locator(".sheet-layer").waitFor({state:"hidden"});
       await toast(page,"尿布已记录");
+      assert.equal(await page.locator(".filter-chip.active").getAttribute("data-filter"),"diaper");
     }
+    await nav(page,"today");
     assert.deepEqual(await page.locator(".metric-number").allTextContents(),["45ml","1次","3次"]);
     await open(page,"diaper");
     await btn(page,"diaper-detail").click();
@@ -145,7 +168,8 @@ test(engine + " mobile: records, refresh, CSV, new/legacy backup, cancelled or f
     await field(page,"color").fill("测试颜色");
     await submit(page);
 
-    await btn(page,"bilirubin-history").click();
+    await nav(page,"today");
+    await btn(page,"record-history","bilirubin").click();
     await page.getByRole("heading",{name:"黄疸记录",exact:true}).waitFor();
     assert.ok(await page.getByText("暂无黄疸记录").isVisible());
     assert.equal(await page.locator(".sheet-layer").count(),0);
@@ -170,8 +194,8 @@ test(engine + " mobile: records, refresh, CSV, new/legacy backup, cancelled or f
       if (method==="TcB") {
         assert.match(await lines(page).first().innerText(),/TcB · 平均 2\.8 μmol\/L/);
         await nav(page,"today");
-        assert.match(await btn(page,"bilirubin-history").innerText(),/最近：平均 2\.8 μmol\/L/);
-        await btn(page,"bilirubin-history").click();
+        assert.match(await btn(page,"record-history","bilirubin").innerText(),/平均 2\.8 μmol\/L/);
+        await btn(page,"record-history","bilirubin").click();
       }
     }
     assert.equal(await lines(page).count(),2);
@@ -180,6 +204,7 @@ test(engine + " mobile: records, refresh, CSV, new/legacy backup, cancelled or f
     await field(page,"value").fill("36.7");
     await field(page,"site").selectOption("腋下");
     await submit(page);
+    assert.match(await lines(page).first().innerText(),/36\.7 ℃ · 腋下/);
     await nav(page,"health");
     for (const weight of ["2.65","2.7"]) {
       await open(page,"weight");
@@ -373,6 +398,55 @@ test(engine + " mobile: existing IndexedDB is preserved and file share does not 
   }
 });
 
+test(engine + " mobile: compact entries show the latest live record and open its history", {timeout:45000}, async () => {
+  const context=await mobile();
+  try {
+    const page=await context.newPage();
+    await page.goto(origin+prefix);
+    await ready(page);
+    const samples=[
+      ["bottle",{milk_type:"expressed",amount_ml:65,has_fortifier:false},"65 ml",{milk_type:"expressed",amount_ml:30}],
+      ["diaper",{kind:"dirty",color:"绿色"},"大便 · 绿色",{kind:"wet"}],
+      ["bilirubin",{method:"TcB",value:3.5,readings:[2,3,4,5],unit:"mg/dL"},"平均 3.5 mg/dL",{method:"TcB",value:2,unit:"mg/dL"}],
+      ["temperature",{value:36.9,site:"腋下"},"36.9 ℃",{value:36.5,site:"腋下"}]
+    ];
+    const records=samples.flatMap(([type,payload,,older])=>[
+      {record_id:type+"-old",type,payload:older,occurred_at:"2026-01-01T08:00:00+08:00"},
+      {record_id:type+"-latest",type,payload,occurred_at:"2026-01-02T09:20:00+08:00"}
+    ]);
+    records.push({record_id:"deleted-latest",type:"bottle",payload:{milk_type:"expressed",amount_ml:999},
+      occurred_at:"2026-01-03T12:00:00+08:00",deleted_at:"2026-01-04T12:00:00+08:00"});
+    await nav(page,"settings");
+    await upload(page,{...legacy,records});
+    await confirmRestore(page);
+    await toast(page,"备份已恢复");
+    await nav(page,"today");
+    for (const [kind,,summary] of samples) {
+      const entry=btn(page,"record-history",kind);
+      assert.equal(await entry.locator(".tile-value").innerText(),summary);
+      assert.equal(await entry.locator(".tile-time").innerText(),"1月2日 09:20");
+      await entry.click();
+      assert.equal(await lines(page).count(),2);
+      assert.match(await lines(page).first().innerText(),/09:20/);
+      assert.equal(await page.locator(".sheet-layer").count(),0);
+      await btn(page,"new-record",kind).click();
+      assert.equal(await page.locator("#record-form").getAttribute("data-edit"),"");
+      await btn(page,"close-sheet").click();
+      await nav(page,"today");
+    }
+    await btn(page,"record-history","temperature").click();
+    await lines(page).first().getByRole("button",{name:"删除"}).click();
+    await toast(page,"记录已移入回收");
+    await nav(page,"today");
+    assert.equal(await btn(page,"record-history","temperature").locator(".tile-value").innerText(),"36.5 ℃");
+    await page.getByRole("button",{name:"撤销",exact:true}).click();
+    await toast(page,"已恢复记录");
+    assert.equal(await btn(page,"record-history","temperature").locator(".tile-value").innerText(),"36.9 ℃");
+  } finally {
+    await context.close();
+  }
+});
+
 test(engine + " mobile: one, three and five bilirubin readings average dynamically and restore", {timeout:45000}, async () => {
   const context=await mobile();
   try {
@@ -380,7 +454,7 @@ test(engine + " mobile: one, three and five bilirubin readings average dynamical
     const page=await context.newPage();
     await page.goto(origin+prefix);
     await ready(page);
-    await btn(page,"bilirubin-history").click();
+    await btn(page,"record-history","bilirubin").click();
     await open(page,"bilirubin");
     assert.equal(await field(page,"reading").count(),1);
     assert.ok(await btn(page,"reading-remove").isDisabled());
@@ -429,7 +503,7 @@ test(engine + " mobile: one, three and five bilirubin readings average dynamical
     await toast(page,"备份已恢复");
     await page.reload();
     await ready(page);
-    await btn(page,"bilirubin-history").click();
+    await btn(page,"record-history","bilirubin").click();
     assert.equal(await lines(page).count(),3);
     await nav(page,"settings");
     assert.deepEqual(JSON.parse(await getBackup(page)).records,backup.records);
@@ -453,6 +527,7 @@ test(engine + " mobile: home day refreshes at local midnight and on return", {ti
     await open(page,"bottle");
     await page.locator("[data-amount='45']").click();
     await submit(page);
+    await nav(page,"today");
     assert.deepEqual(await page.locator(".metric-number").allTextContents(),["45ml","1次","0次"]);
 
     await page.clock.fastForward(125000);
@@ -501,7 +576,7 @@ test(engine + " mobile: dated milk totals and imported bilirubin batches", {time
     await confirmRestore(page);
     await toast(page,"备份已恢复");
     await nav(page,"today");
-    await btn(page,"bilirubin-history").click();
+    await btn(page,"record-history","bilirubin").click();
     assert.equal(await lines(page).count(),5);
     const average = lines(page).filter({hasText:"平均"});
     assert.equal(await average.count(),1);
@@ -592,6 +667,23 @@ test(engine + " mobile: dated milk totals and imported bilirubin batches", {time
     await ready(page);
     await page.getByRole("button",{name:"历史奶量"}).click();
     assert.deepEqual(await marks.allTextContents(),["12/29 · 0 ml","1/1 · 45 ml","1/2 · 50 ml"]);
+    await date.fill("2026-01-01");
+    await date.dispatchEvent("change");
+    await open(page,"bottle");
+    const today=await page.evaluate(()=>{
+      const now=new Date();
+      return new Date(now.getTime()-now.getTimezoneOffset()*60000).toISOString().slice(0,10);
+    });
+    assert.equal((await field(page,"occurred_at").inputValue()).slice(0,10),today);
+    await btn(page,"close-sheet").click();
+    assert.equal(await date.inputValue(),"2026-01-01");
+    await open(page,"bottle");
+    await page.locator("[data-amount='45']").click();
+    await submit(page);
+    assert.equal(await date.inputValue(),"");
+    assert.match(await lines(page).first().innerText(),/45 ml/);
+    assert.ok((await page.locator(".date-heading").first().innerText()).includes(today));
+    assert.equal(await page.locator("#view").evaluate(view=>view.scrollTop),0);
   } finally {
     await context.close();
   }
