@@ -106,12 +106,12 @@ svg { display: block; flex-shrink: 0; }
 .section-heading { display: flex; justify-content: space-between; align-items: center; margin: 25px 1px 12px; }
 .section-heading h2 { margin: 0; font-size: 17px; font-weight: 760; letter-spacing: -.02em; color: var(--ink-deep); }
 .section-heading .hint { font-size: 12px; color: var(--muted); }
-.action-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; }
-.action-tile { min-height: 96px; border: 0; text-align: left; border-radius: 16px; padding: 12px; transition: transform .15s ease; display: grid; grid-template-columns:28px minmax(0,1fr) 18px; align-content:start; align-items:center; gap:5px 8px; }
+.action-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 11px; }
+.action-tile { min-height: 134px; border: 1px solid rgba(255,255,255,.75); text-align: left; border-radius: 23px; padding: 18px 16px; box-shadow:var(--shadow); transition: transform .15s ease; display: grid; grid-template-columns:44px minmax(0,1fr) 18px; align-content:start; align-items:center; gap:5px 8px; }
 .action-tile:active { transform: scale(.975); }
-.action-tile .tile-icon { width: 28px; height: 28px; border-radius: 9px; display: grid; place-items: center; background: rgba(255,255,255,.62); }
-.action-tile .tile-icon .icon { width:20px; height:20px; }
-.action-tile strong { font-size: 16px; font-weight: 750; color:var(--ink); }
+.action-tile .tile-icon { width: 44px; height: 44px; border-radius: 16px; display: grid; place-items: center; background: rgba(255,255,255,.62); }
+.action-tile .tile-icon .icon { width:28px; height:28px; }
+.action-tile strong { font-size: 18px; font-weight: 750; color:var(--ink); }
 .action-tile small { grid-column:1 / -1; min-width:0; color:var(--ink); overflow-wrap:anywhere; font-variant-numeric:tabular-nums; }
 .action-tile .tile-value { font-size:12px; line-height:1.45; }
 .action-tile .tile-time { font-size:11px; line-height:1.4; }
@@ -331,6 +331,8 @@ body.dark {
 @media (max-width: 365px) {
   .view { padding-left:16px; padding-right:16px; }
   .app-top { padding-left:16px; padding-right:16px; }
+  .action-tile { min-height:126px; padding:15px; grid-template-columns:36px minmax(0,1fr) 18px; }
+  .action-tile .tile-icon { width:36px; height:36px; border-radius:12px; }
   .filter-chips { margin-left:-16px; margin-right:-16px; padding-left:16px; }
   .metric-number { font-size:20px; }
 }

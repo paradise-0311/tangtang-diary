@@ -415,8 +415,8 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
       ${showingMilk ? `<div class="milk-date-filter"><label class="form-field"><span>按日期查看</span>
         <input type="date" class="field-input" id="milk-date" value="${escapeHtml(app.milkDay)}" max="${today}"/></label>
         ${app.milkDay ? '<button type="button" class="subtle-action" data-action="milk-date-clear">全部日期</button>' : ""}</div>` : ""}
-      ${html || empty}
       ${showingMilk ? milkTrendMarkup(dailyMilk,chartEnd,app.milkPeriod) : ""}
+      ${html || empty}
       ${recordKind ? `<div class="history-add"><button type="button" class="form-submit" data-action="new-record" data-kind="${recordKind}">${svg("plus","icon-sm")}添加${TYPE_LABELS[recordKind]}记录</button></div>` : ""}
     </section>`;
   }
@@ -927,9 +927,7 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
     if (name==="milk-history") {
       app.filter = "bottle";
       app.milkDay = "";
-      switchTab("records");
-      document.querySelector(".milk-trend").scrollIntoView({block:"start"});
-      return;
+      return switchTab("records");
     }
     if (name==="milk-date-clear") {
       app.milkDay = "";

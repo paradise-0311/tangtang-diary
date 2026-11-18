@@ -398,7 +398,7 @@ test(engine + " mobile: existing IndexedDB is preserved and file share does not 
   }
 });
 
-test(engine + " mobile: compact entries show the latest live record and open its history", {timeout:45000}, async () => {
+test(engine + " mobile: home entries show the latest live record and open its history", {timeout:45000}, async () => {
   const context=await mobile();
   try {
     const page=await context.newPage();
@@ -427,6 +427,10 @@ test(engine + " mobile: compact entries show the latest live record and open its
       assert.equal(await entry.locator(".tile-time").innerText(),"1月2日 09:20");
       await entry.click();
       assert.equal(await lines(page).count(),2);
+      if (kind==="bottle") {
+        assert.ok(await page.locator(".milk-trend").evaluate(chart=>
+          !!(chart.compareDocumentPosition(document.querySelector(".record-line")) & Node.DOCUMENT_POSITION_FOLLOWING)));
+      }
       assert.match(await lines(page).first().innerText(),/09:20/);
       assert.equal(await page.locator(".sheet-layer").count(),0);
       await btn(page,"new-record",kind).click();
