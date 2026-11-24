@@ -41,7 +41,7 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
   };
   const app = { data: null, db: null, tab: "today", filter: "all", milkDay: "", milkPeriod: 7, toastTimer: null, saving: false,
     storageUnavailable: false, picker: null, sheetTrigger: null };
-  let renderedHomeDay = "", midnightTimer;
+  let renderedHomeClock = "", clockTimer;
 
   function svg(name, extra = "") {
     return `<svg class="icon ${extra}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ICONS.info}</svg>`;
@@ -101,13 +101,20 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
     const days = (Date.parse(today+"T00:00:00Z") - Date.parse(birthday+"T00:00:00Z")) / 864e5;
     return Math.max(1, days + 1);
   }
-  function refreshHomeDate() {
-    clearTimeout(midnightTimer);
+  function homeGreeting(date) {
+    const hour = date.getHours();
+    return hour < 6 || hour >= 23 ? "夜深了，妈妈" : hour < 11 ? "早安，妈妈" :
+      hour < 14 ? "中午好，妈妈" : hour < 18 ? "下午好，妈妈" : "晚上好，妈妈";
+  }
+  function homeClockKey(date) {
+    return dayKey(date) + "|" + homeGreeting(date);
+  }
+  function refreshHomeClock() {
+    clearTimeout(clockTimer);
     const now = new Date();
-    if (app.tab === "today" && dayKey(now) !== renderedHomeDay) render();
-    const nextMidnight = new Date(now);
-    nextMidnight.setHours(24, 0, 0, 0);
-    midnightTimer = setTimeout(refreshHomeDate, nextMidnight - now);
+    if (app.tab === "today" && homeClockKey(now) !== renderedHomeClock) render();
+    // Check each local minute as a fallback when a suspended PWA resumes without a focus event.
+    clockTimer = setTimeout(refreshHomeClock, 60000 - now.getSeconds()*1000 - now.getMilliseconds());
   }
   function hasProfile() {
     return typeof app.data.profile.nickname === "string" && !!app.data.profile.nickname.trim() &&
@@ -284,7 +291,8 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
   }
   function renderToday(records) {
     const d = new Date();
-    const today = renderedHomeDay = dayKey(d);
+    const today = dayKey(d);
+    renderedHomeClock = homeClockKey(d);
     const feed = milkByDay(records).get(today) || {total:0,count:0};
     const diapers = records.filter(r=>r.type === "diaper" && dayKey(r.occurred_at) === today).length;
     const recent = records.slice(0,4);
@@ -292,7 +300,7 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
     const ready = hasProfile();
     const weekday = ["星期日","星期一","星期二","星期三","星期四","星期五","星期六"][d.getDay()];
     return `<section class="screen-enter">
-      <div class="screen-title"><div><div class="eyebrow">${d.getMonth()+1}月${d.getDate()}日 · ${weekday}</div><h1>早安，妈妈</h1></div><button class="subtle-action" data-action="profile">${svg("edit","icon-sm")}宝宝资料</button></div>
+      <div class="screen-title"><div><div class="eyebrow">${d.getMonth()+1}月${d.getDate()}日 · ${weekday}</div><h1>${homeGreeting(d)}</h1></div><button class="subtle-action" data-action="profile">${svg("edit","icon-sm")}宝宝资料</button></div>
       <div class="hero-card"><div class="hero-top"><div><span class="eyebrow">今天是新的照护日</span>
         <div class="hero-title">${ready ? `${nickname} · 第 ${babyDay(today)} 天` : nickname}</div>
         <p class="hero-sub">${ready ? "记录好每一次喂养和测量" : "请填写宝宝昵称和准确出生时间；已有备份可到设置导入。"}</p></div><div class="avatar-baby">${svg("baby","icon-xl")}</div></div>
@@ -974,10 +982,10 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
   });
   window.visualViewport?.addEventListener("resize",syncSheetViewport);
   window.visualViewport?.addEventListener("scroll",syncSheetViewport);
-  window.addEventListener("focus",refreshHomeDate);
-  window.addEventListener("pageshow",refreshHomeDate);
+  window.addEventListener("focus",refreshHomeClock);
+  window.addEventListener("pageshow",refreshHomeClock);
   document.addEventListener("visibilitychange",()=>{
-    if (document.visibilityState === "visible") refreshHomeDate();
+    if (document.visibilityState === "visible") refreshHomeClock();
   });
   async function init() {
     try {
@@ -994,7 +1002,7 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
       app.data=emptyData(); app.storageUnavailable=true;
     }
     render();
-    refreshHomeDate();
+    refreshHomeClock();
     if ("serviceWorker" in navigator && window.isSecureContext) {
       navigator.serviceWorker.register(new URL("./sw.js",import.meta.url), {
         scope:new URL("./",import.meta.url).href,

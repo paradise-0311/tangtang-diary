@@ -50,7 +50,7 @@ const btn = (page,action,kind) => page.locator('button[data-action="'+action+'"]
 const field = (page,name) => page.locator('#sheet-root [name="'+name+'"]');
 const choice = (page,name,value) => page.locator('label:has(input[name="'+name+'"][value="'+value+'"])').click();
 const toast = (page,text) => page.locator("#toast-root .toast").filter({hasText:text}).waitFor();
-const ready = page => page.getByRole("heading",{name:"早安，妈妈"}).waitFor();
+const ready = page => page.getByRole("heading",{name:/^(早安|中午好|下午好|晚上好|夜深了)，妈妈$/}).waitFor();
 const open = async (page,kind) => {
   if (!await btn(page,"new-record",kind).count()) {
     await nav(page,"today");
@@ -516,6 +516,30 @@ test(engine + " mobile: one, three and five bilirubin readings average dynamical
   }
 });
 
+test(engine + " mobile: greeting follows the local hour and refreshes without navigation", {timeout:30000}, async () => {
+  const context=await mobile();
+  try {
+    const page=await context.newPage();
+    await page.clock.install({time:new Date("2026-01-01T05:59:50+08:00")});
+    await page.goto(origin+prefix);
+    await ready(page);
+    assert.equal(await page.locator(".screen-title h1").innerText(),"夜深了，妈妈");
+    await page.clock.fastForward(15000);
+    assert.equal(await page.locator(".screen-title h1").innerText(),"早安，妈妈");
+    for (const [hour,greeting] of [[11,"中午好"],[14,"下午好"],[18,"晚上好"],[23,"夜深了"]]) {
+      await page.clock.setSystemTime(new Date(`2026-01-01T${hour}:00:00+08:00`));
+      await page.clock.fastForward(61000);
+      assert.equal(await page.locator(".screen-title h1").innerText(),greeting+"，妈妈");
+    }
+    await page.clock.setSystemTime(new Date("2026-01-02T12:30:00+08:00"));
+    await page.evaluate(()=>window.dispatchEvent(new Event("focus")));
+    assert.equal(await page.locator(".screen-title h1").innerText(),"中午好，妈妈");
+    assert.match(await page.locator(".screen-title .eyebrow").innerText(),/1月2日/);
+  } finally {
+    await context.close();
+  }
+});
+
 test(engine + " mobile: home day refreshes at local midnight and on return", {timeout:30000}, async () => {
   const context=await mobile();
   try {
@@ -544,6 +568,11 @@ test(engine + " mobile: home day refreshes at local midnight and on return", {ti
     await page.evaluate(()=>window.dispatchEvent(new Event("pageshow")));
     assert.match(await page.locator(".hero-title").innerText(),/第 3 天/);
     assert.match(await page.locator(".screen-title .eyebrow").innerText(),/1月2日/);
+    await page.clock.setSystemTime(new Date("2026-01-03T00:05:00+08:00"));
+    await page.clock.fastForward(61000);
+    assert.match(await page.locator(".hero-title").innerText(),/第 4 天/);
+    assert.match(await page.locator(".screen-title .eyebrow").innerText(),/1月3日/);
+    assert.equal(await page.locator(".screen-title h1").innerText(),"夜深了，妈妈");
   } finally {
     await context.close();
   }
