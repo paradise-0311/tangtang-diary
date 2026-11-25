@@ -309,7 +309,7 @@ test(engine + " mobile: records, refresh, CSV, new/legacy backup, cancelled or f
       const put=IDBObjectStore.prototype.put;
       IDBObjectStore.prototype.put=function(...args) {
         IDBObjectStore.prototype.put=put;
-        this.transaction.abort();
+        throw new DOMException("Synthetic full storage","QuotaExceededError");
       };
     });
     await upload(page,legacy);
@@ -346,7 +346,161 @@ test(engine + " mobile: records, refresh, CSV, new/legacy backup, cancelled or f
   }
 });
 
-test(engine + " mobile: existing IndexedDB is preserved and file share does not claim success", {timeout:30000}, async () => {
+async function trackDatabase(context) {
+  await context.addInitScript(()=>{
+    const open=IDBFactory.prototype.open;
+    IDBFactory.prototype.open=function(...args) {
+      const request=open.apply(this,args);
+      if (args[0]==="xiaoman-baby-journal-demo-v1") {
+        request.addEventListener("success",()=>{
+          window.diaryTestDatabase=request.result;
+        });
+      }
+      return request;
+    };
+  });
+}
+
+test(engine + " mobile: closed database reconnects and bounded failure keeps the form", {timeout:45000}, async () => {
+  const context=await mobile();
+  try {
+    await trackDatabase(context);
+    await context.addInitScript(()=>Object.defineProperty(Navigator.prototype,"canShare",{value:()=>false,configurable:true}));
+    const page=await context.newPage();
+    const errors=[];
+    page.on("pageerror",error=>errors.push(error.message));
+    await page.goto(origin+prefix);
+    await ready(page);
+    await open(page,"bottle");
+    await page.locator("[data-amount='45']").click();
+    await page.locator(".switch-row:has(#fortifier-check)").click();
+    await field(page,"note").fill("仅测试断连恢复");
+    await page.evaluate(()=>{
+      window.diaryTestDatabase.close();
+      window.dispatchEvent(new Event("pageshow"));
+    });
+    await submit(page);
+    assert.equal(await lines(page).count(),1);
+    assert.match(await lines(page).first().innerText(),/45 ml · 已添加增强剂/);
+
+    await open(page,"bottle");
+    await page.locator("[data-amount='60']").click();
+    await field(page,"note").fill("仅测试重试失败后保留");
+    await page.evaluate(()=>{
+      const transaction=IDBDatabase.prototype.transaction;
+      window.diaryTestForcedCloses=0;
+      IDBDatabase.prototype.transaction=function(...args) {
+        if (args[1]==="readwrite" && window.diaryTestForcedCloses<2) {
+          window.diaryTestForcedCloses++;
+          this.close();
+        }
+        return transaction.apply(this,args);
+      };
+    });
+    await page.locator(".sheet-panel button[type=submit]").click();
+    await toast(page,"存储连接暂未恢复");
+    assert.equal(await page.evaluate(()=>window.diaryTestForcedCloses),2);
+    assert.equal(await field(page,"amount_ml").inputValue(),"60");
+    assert.equal(await field(page,"note").inputValue(),"仅测试重试失败后保留");
+    assert.ok(!await field(page,"has_fortifier").isChecked());
+    assert.equal(await lines(page).count(),1);
+    await submit(page);
+    assert.equal(await lines(page).count(),2);
+
+    await page.evaluate(()=>{
+      window.diaryTestDatabase.close();
+      window.diaryTestDatabase.dispatchEvent(new Event("close"));
+    });
+    await nav(page,"settings");
+    const backup=JSON.parse(await getBackup(page));
+    assert.deepEqual(backup.records.map(record=>record.payload.amount_ml),[45,60]);
+    assert.equal(backup.records[0].payload.has_fortifier,true);
+    assert.equal(backup.records[0].payload.note,"仅测试断连恢复");
+    await page.reload();
+    await ready(page);
+    assert.deepEqual(await page.locator(".metric-number").allTextContents(),["105ml","2次","0次"]);
+    assert.deepEqual(errors,[]);
+  } finally {
+    await context.close();
+  }
+});
+
+test(engine + " mobile: interrupted saves retry once without duplicating or overwriting another tab", {timeout:45000}, async () => {
+  const context=await mobile();
+  try {
+    await trackDatabase(context);
+    await context.addInitScript(()=>Object.defineProperty(Navigator.prototype,"canShare",{value:()=>false,configurable:true}));
+    const page=await context.newPage();
+    const errors=[];
+    page.on("pageerror",error=>errors.push(error.message));
+    await page.goto(origin+prefix);
+    await ready(page);
+    await open(page,"bottle");
+    await page.locator("[data-amount='45']").click();
+    await page.evaluate(()=>{
+      const put=IDBObjectStore.prototype.put;
+      let abortOnce=true;
+      window.diaryTestPuts=0;
+      IDBObjectStore.prototype.put=function(...args) {
+        window.diaryTestPuts++;
+        if (abortOnce) {
+          abortOnce=false;
+          this.transaction.abort();
+          return;
+        }
+        return put.apply(this,args);
+      };
+    });
+    await submit(page);
+    assert.equal(await lines(page).count(),1);
+    assert.equal(await page.evaluate(()=>window.diaryTestPuts),2);
+
+    await open(page,"bottle");
+    await page.locator("[data-amount='60']").click();
+    await page.evaluate(()=>{
+      const transaction=IDBDatabase.prototype.transaction;
+      let signalLost=true;
+      window.diaryTestPuts=0;
+      IDBDatabase.prototype.transaction=function(...args) {
+        const tx=transaction.apply(this,args);
+        if (args[1]==="readwrite" && signalLost) {
+          signalLost=false;
+          // The write committed, but the caller receives an abort signal before its completion handler.
+          tx.addEventListener("complete",()=>tx.dispatchEvent(new Event("abort")));
+        }
+        return tx;
+      };
+    });
+    await submit(page);
+    assert.equal(await lines(page).count(),2);
+    assert.equal(await page.evaluate(()=>window.diaryTestPuts),1);
+
+    const other=await context.newPage();
+    await other.goto(origin+prefix);
+    await ready(other);
+    await open(page,"bottle");
+    await page.locator("[data-amount='75']").click();
+    await field(page,"note").fill("仅测试其他窗口冲突");
+    await open(other,"diaper");
+    await other.locator('[data-diaper-quick="wet"]').click();
+    await toast(other,"尿布已记录");
+    await page.evaluate(()=>window.diaryTestDatabase.close());
+    await page.locator(".sheet-panel button[type=submit]").click();
+    await toast(page,"已在其他窗口更新");
+    assert.equal(await field(page,"amount_ml").inputValue(),"75");
+    assert.equal(await field(page,"note").inputValue(),"仅测试其他窗口冲突");
+    await nav(other,"settings");
+    const backup=JSON.parse(await getBackup(other));
+    assert.equal(backup.records.length,3);
+    assert.deepEqual(backup.records.filter(record=>record.type==="bottle").map(record=>record.payload.amount_ml),[45,60]);
+    assert.equal(backup.records.filter(record=>record.type==="diaper").length,1);
+    assert.deepEqual(errors,[]);
+  } finally {
+    await context.close();
+  }
+});
+
+test(engine + " mobile: existing IndexedDB survives interrupted startup and file share does not claim success", {timeout:30000}, async () => {
   const context=await mobile();
   try {
     const page=await context.newPage();
@@ -363,6 +517,17 @@ test(engine + " mobile: existing IndexedDB is preserved and file share does not 
       req.onerror=fail;
     }),snapshot);
     await put();
+    await context.addInitScript(()=>{
+      const transaction=IDBDatabase.prototype.transaction;
+      let closeOnce=true;
+      IDBDatabase.prototype.transaction=function(...args) {
+        if (args[1]==="readonly" && closeOnce) {
+          closeOnce=false;
+          this.close();
+        }
+        return transaction.apply(this,args);
+      };
+    });
     await page.reload();
     await ready(page);
     assert.match(await page.locator(".hero-title").innerText(),/测试宝宝/);

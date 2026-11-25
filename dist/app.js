@@ -41,7 +41,7 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
   };
   const app = { data: null, db: null, tab: "today", filter: "all", milkDay: "", milkPeriod: 7, toastTimer: null, saving: false,
     storageUnavailable: false, picker: null, sheetTrigger: null };
-  let renderedHomeClock = "", clockTimer;
+  let renderedHomeClock = "", clockTimer, databaseOpening = null;
 
   function svg(name, extra = "") {
     return `<svg class="icon ${extra}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ICONS.info}</svg>`;
@@ -136,39 +136,79 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
         const db = request.result;
         if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE);
       };
-      request.onsuccess = () => resolve(request.result);
+      request.onsuccess = () => {
+        const db = request.result;
+        db.onclose = () => { if (app.db === db) app.db = null; };
+        db.onversionchange = () => releaseDatabase(db);
+        resolve(db);
+      };
       request.onerror = () => reject(request.error);
     });
   }
+  function releaseDatabase(db) {
+    if (app.db === db) app.db = null;
+    db?.close();
+  }
+  function getDatabase() {
+    if (app.db) return Promise.resolve(app.db);
+    if (!databaseOpening) {
+      databaseOpening = openDatabase().then(db=>(app.db=db)).finally(()=>{ databaseOpening=null; });
+    }
+    return databaseOpening;
+  }
+  function connectionInterrupted(error) {
+    return ["InvalidStateError","AbortError","UnknownError"].includes(error?.name);
+  }
+  async function withDatabase(operation) {
+    for (let attempt=0; attempt<2; attempt++) {
+      let db;
+      try {
+        db = await getDatabase();
+        return await operation(db);
+      } catch (error) {
+        if (connectionInterrupted(error)) {
+          releaseDatabase(db);
+          if (attempt === 0) continue;
+        }
+        throw error;
+      }
+    }
+  }
   function readSnapshot() {
-    return new Promise((resolve, reject) => {
-      const req = app.db.transaction(STORE, "readonly").objectStore(STORE).get(STORAGE_KEY);
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
-    });
+    return withDatabase(db=>new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, "readonly");
+      const req = tx.objectStore(STORE).get(STORAGE_KEY);
+      tx.oncomplete = () => resolve(req.result);
+      tx.onabort = () => reject(tx.error || new DOMException("读取中断","AbortError"));
+    }));
   }
   function persist(snapshot) {
-    return new Promise((resolve, reject) => {
-      const tx = app.db.transaction(STORE, "readwrite");
+    const expectedRevision = app.data.storage_revision;
+    return withDatabase(db=>new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, "readwrite");
       const store = tx.objectStore(STORE);
       const incoming = store.get(STORAGE_KEY);
-      let conflict = false;
+      let failure;
       incoming.onsuccess = () => {
-        if (incoming.result?.storage_revision !== app.data.storage_revision) {
-          conflict = true;
-          tx.abort();
-        } else {
+        try {
+          // A reconnect may follow an uncertain completion: the same save must not be written twice.
+          if (incoming.result?.storage_revision === snapshot.storage_revision) return;
+          if (incoming.result?.storage_revision !== expectedRevision) {
+            throw new Error("该网页已在其他窗口更新，请重新打开后再试");
+          }
           store.put(snapshot, STORAGE_KEY);
+        } catch (error) {
+          failure = error;
+          tx.abort();
         }
       };
       tx.oncomplete = () => resolve();
-      tx.onabort = () => reject(conflict
-        ? new Error("该网页已在其他窗口更新，请重新打开后再试") : new Error("本机写入失败"));
-    });
+      tx.onabort = () => reject(failure || tx.error || new DOMException("写入中断","AbortError"));
+    }));
   }
   async function saveAndRender(next, message, {close = false, tab, resetHistory = false, failure = "未能保存，原有数据仍保留。"} = {}) {
     if (app.saving) return false;
-    if (app.storageUnavailable || !app.db) {
+    if (app.storageUnavailable) {
       showToast("本机存储不可用，无法保存。请重新打开后再试。");
       return false;
     }
@@ -177,7 +217,9 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
     try {
       await persist(snapshot);
     } catch (err) {
-      showToast(failure + (err?.message || ""));
+      const detail = connectionInterrupted(err) ? "存储连接暂未恢复，请稍后再点保存，填写内容仍保留。" :
+        err?.name==="QuotaExceededError" ? "本机存储空间不足，请腾出空间后再试。" : err?.message || "";
+      showToast(failure + detail);
       return false;
     } finally {
       app.saving = false;
@@ -990,7 +1032,6 @@ import { BACKUP_LIMIT, RECORD_LIMIT, RECORD_TYPES, bilirubinAverage, makeBackup,
   async function init() {
     try {
       if (!("indexedDB" in window)) throw new Error("IndexedDB unavailable");
-      app.db=await openDatabase();
       const stored=await readSnapshot();
       if (stored === undefined) app.data=emptyData();
       else {
